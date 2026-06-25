@@ -1,0 +1,89 @@
+interface SidebarProps {
+  activePath: string;
+  collapsed: boolean;
+  mobileOpen: boolean;
+  onCollapse: () => void;
+  onNavigate: (path: string) => void;
+}
+
+function MenuIcon({ icon }: { icon: string }) {
+  const paths: Record<string, ReactNode> = {
+    D: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>,
+    R: <><path d="M6 3h12v18H6z" /><path d="M9 8h6M9 12h6M9 16h4" /></>,
+    A: <><circle cx="12" cy="8" r="3" /><path d="M6 21v-2a6 6 0 0 1 12 0v2M18 4v4M16 6h4" /></>,
+    C: <><path d="m3 11 15-6v14L3 13z" /><path d="M7 14v5h4" /></>,
+    M: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></>,
+    H: <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></>,
+    S: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H3v-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V3h4v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></>,
+  };
+
+  return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[icon]}</svg>;
+}
+
+const groups = [
+  {
+    title: "Visao Geral",
+    items: [{ label: "Dashboard", path: "/dashboard", icon: "D" }],
+  },
+  {
+    title: "Operacional",
+    items: [
+      { label: "Contas a Receber", path: "/contas-a-receber", icon: "R" },
+      { label: "Aniversariantes", path: "/aniversariantes", icon: "A" },
+      { label: "Campanhas/Promoções", path: "/campanhas-promocao", icon: "C" },
+      { label: "Mensagens Programadas", path: "/mensagens-programadas", icon: "M" },
+      { label: "Histórico", path: "/historico-envios", icon: "H" },
+    ],
+  },
+  {
+    title: "Sistema",
+    items: [{ label: "Configuracoes", path: "/configuracoes", icon: "S" }],
+  },
+];
+
+export function Sidebar({ activePath, collapsed, mobileOpen, onCollapse, onNavigate }: SidebarProps) {
+  return (
+    <aside className={`sidebar${collapsed ? " sidebar-collapsed" : ""}${mobileOpen ? " sidebar-mobile-open" : ""}`}>
+      <div className="sidebar-brand">
+        <div className="sidebar-brand-mark">CP</div>
+        <div className="sidebar-brand-copy">
+          <strong>Consulta Clipp Pro</strong>
+          <span>Gestao de Campanhas e Cobrancas</span>
+        </div>
+        <button className="sidebar-collapse-button" type="button" onClick={onCollapse} aria-label={collapsed ? "Expandir menu" : "Recolher menu"}>
+          <span aria-hidden="true">{collapsed ? ">" : "<"}</span>
+        </button>
+      </div>
+
+      <nav className="sidebar-nav" aria-label="Menu principal">
+        {groups.map((group) => (
+          <section className="sidebar-group" key={group.title}>
+            <h2>{group.title}</h2>
+            {group.items.map((item) => {
+              const active = activePath === item.path;
+
+              return (
+                <a
+                  className={active ? "sidebar-link sidebar-link-active" : "sidebar-link"}
+                  href={item.path}
+                  key={item.path}
+                  title={collapsed ? item.label : undefined}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onNavigate(item.path);
+                  }}
+                >
+                  <span className="sidebar-icon" aria-hidden="true">
+                    <MenuIcon icon={item.icon} />
+                  </span>
+                  <span className="sidebar-link-label">{item.label}</span>
+                </a>
+              );
+            })}
+          </section>
+        ))}
+      </nav>
+    </aside>
+  );
+}
+import type { ReactNode } from "react";
