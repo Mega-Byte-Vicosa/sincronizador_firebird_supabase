@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth/AuthContext";
 
 function formatarCnpj(valor: string) {
@@ -18,6 +18,7 @@ export function Login() {
   const [mostrarSenha, setMostrarSenha] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const usuarioInputRef = useRef<HTMLInputElement>(null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -40,22 +41,56 @@ export function Login() {
 
   return (
     <main className="login-page">
-      <section className="login-hero" aria-label="Apresentação Consulta Clipp Pro">
-        <div className="login-brand">
-          <span className="login-brand-mark">CP</span>
-          <span>Consulta Clipp Pro</span>
-        </div>
+      <section className="login-hero" aria-label="Apresentação MegaByte Connect">
         <div className="login-hero-content">
-          <span className="login-kicker">Gestão inteligente</span>
-          <h1>Seu negócio organizado, conectado e em movimento.</h1>
-          <p>Sistema SaaS de gestão financeira e automação de mensagens para sua empresa.</p>
+          <span className="login-kicker">Automação inteligente pelo WhatsApp</span>
+          <h1>
+            MegaByte
+            <br />
+            Connect
+          </h1>
+          <p>
+            Transforme mensagens em vendas, cobranças em recebimentos
+            <br />
+            e contatos em clientes.
+          </p>
           <div className="login-feature-list">
-            <span>Contas a receber em tempo real</span>
-            <span>Automação segura pelo WhatsApp</span>
-            <span>Indicadores claros para decidir melhor</span>
+            <span>Cobranças automáticas pelo WhatsApp</span>
+            <span>Campanhas, aniversários e promoções em um só lugar</span>
+            <span>Mais relacionamento, respostas e conversões</span>
           </div>
         </div>
-        <small>Consulta Clipp Pro · Ambiente seguro</small>
+
+        <div className="login-hero-footer" aria-label="Contatos Mega Byte Informática">
+          <div className="login-contact-grid">
+            <a href="tel:+553138912344" aria-label="Ligar para Mega Byte">
+              <img src="/icons/phone.svg" alt="" aria-hidden="true" />
+              <span>(31) 3891-2344</span>
+            </a>
+            <a
+              href="https://wa.me/5531995552344?text=Ol%C3%A1%2C%20vim%20pelo%20MegaByte%20Connect%20e%20gostaria%20de%20mais%20informa%C3%A7%C3%B5es."
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Abrir conversa no WhatsApp da Mega Byte"
+            >
+              <img src="/icons/whatsapp.svg" alt="" aria-hidden="true" />
+              <span>(31) 99555-2344</span>
+            </a>
+            <a
+              href="https://www.instagram.com/megabyte.vicosa"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Abrir Instagram da Mega Byte"
+            >
+              <img src="/icons/instagram.svg" alt="" aria-hidden="true" />
+              <span>@megabyte.vicosa</span>
+            </a>
+          </div>
+
+          <a className="login-developer-link" href="https://www.megabyteinfo.net" target="_blank" rel="noopener noreferrer">
+            Desenvolvido por: Mega Byte Informática LTDA
+          </a>
+        </div>
       </section>
 
       <section className="login-form-area">
@@ -77,7 +112,13 @@ export function Login() {
               inputMode="numeric"
               placeholder="00.000.000/0000-00"
               value={cnpj}
-              onChange={(event) => setCnpj(formatarCnpj(event.target.value))}
+              onChange={(event) => {
+                const valorFormatado = formatarCnpj(event.target.value);
+                setCnpj(valorFormatado);
+                if (valorFormatado.replace(/\D/g, "").length === 14) {
+                  usuarioInputRef.current?.focus();
+                }
+              }}
               disabled={enviando}
               autoFocus
             />
@@ -86,6 +127,7 @@ export function Login() {
           <label className="login-field">
             <span>Usuário</span>
             <input
+              ref={usuarioInputRef}
               autoComplete="username"
               placeholder="Digite seu usuário"
               value={usuario}

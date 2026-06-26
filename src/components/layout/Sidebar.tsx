@@ -9,6 +9,7 @@ interface SidebarProps {
 function MenuIcon({ icon }: { icon: string }) {
   const paths: Record<string, ReactNode> = {
     D: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>,
+    U: <><path d="M16 19v-1.4c0-1.5-1.2-2.7-2.7-2.7H6.7C5.2 14.9 4 16.1 4 17.6V19" /><circle cx="10" cy="8" r="3" /><path d="M20 19v-1.3c0-1.3-.8-2.4-2-2.8" /><path d="M16.7 5.2a3 3 0 0 1 0 5.6" /></>,
     R: <><path d="M6 3h12v18H6z" /><path d="M9 8h6M9 12h6M9 16h4" /></>,
     A: <><circle cx="12" cy="8" r="3" /><path d="M6 21v-2a6 6 0 0 1 12 0v2M18 4v4M16 6h4" /></>,
     C: <><path d="m3 11 15-6v14L3 13z" /><path d="M7 14v5h4" /></>,
@@ -28,6 +29,7 @@ const groups = [
   {
     title: "Operacional",
     items: [
+      { label: "Clientes", path: "/clientes", icon: "U" },
       { label: "Contas a Receber", path: "/contas-a-receber", icon: "R" },
       { label: "Aniversariantes", path: "/aniversariantes", icon: "A" },
       { label: "Campanhas/Promoções", path: "/campanhas-promocao", icon: "C" },
@@ -47,8 +49,8 @@ export function Sidebar({ activePath, collapsed, mobileOpen, onCollapse, onNavig
       <div className="sidebar-brand">
         <div className="sidebar-brand-mark">CP</div>
         <div className="sidebar-brand-copy">
-          <strong>Consulta Clipp Pro</strong>
-          <span>Gestao de Campanhas e Cobrancas</span>
+          <strong>MegaByte Connect</strong>
+          <span>Automação inteligente para sua empresa</span>
         </div>
         <button className="sidebar-collapse-button" type="button" onClick={onCollapse} aria-label={collapsed ? "Expandir menu" : "Recolher menu"}>
           <span aria-hidden="true">{collapsed ? ">" : "<"}</span>

@@ -41,6 +41,7 @@ async function processarMensagensProgramadas(idEmpresaParam = null) {
     );
 
     if (error) throw error;
+
     if (data?.success === false) {
       throw new Error(data.error || data.message || 'Falha ao processar mensagens programadas.');
     }
@@ -366,7 +367,7 @@ function montarTelefoneVendedor(row) {
   return null;
 }
 
-function montarRegistro(row, idEmpresa) {
+function montarRegistroContaReceber(row, idEmpresa) {
   return {
     id_empresa: idEmpresa,
     id_ctarec: row.id_ctarec,
@@ -420,9 +421,25 @@ function montarRegistro(row, idEmpresa) {
   };
 }
 
-async function enviarParaSupabase(registros) {
+function montarRegistroCliente(row, idEmpresa) {
+  return {
+    id_empresa: idEmpresa,
+    id_cliente: row.id_cliente,
+    dt_cadastro: converterData(row.dt_cadastro),
+    nome: converterTexto(row.nome),
+    dt_pricomp: converterData(row.dt_pricomp),
+    dt_ultcomp: converterData(row.dt_ultcomp),
+    dt_nascto: converterData(row.dt_nascto),
+    ddd_celul: converterTexto(row.ddd_celul),
+    fone_celul: converterTexto(row.fone_celul),
+    email_cont: converterTexto(row.email_cont),
+    sincronizado_em: new Date().toISOString()
+  };
+}
+
+async function enviarContasReceberParaSupabase(registros) {
   if (!registros.length) {
-    console.log('Nenhum registro encontrado para sincronizar.');
+    console.log('Nenhuma conta a receber encontrada para sincronizar.');
     return;
   }
 
@@ -438,11 +455,37 @@ async function enviarParaSupabase(registros) {
       });
 
     if (error) {
-      console.error('Erro ao enviar lote para o Supabase:', error);
+      console.error('Erro ao enviar lote de contas a receber para o Supabase:', error);
       throw error;
     }
 
-    console.log(`Lote enviado: ${i + lote.length}/${registros.length}`);
+    console.log(`Lote contas a receber enviado: ${i + lote.length}/${registros.length}`);
+  }
+}
+
+async function enviarClientesParaSupabase(registros) {
+  if (!registros.length) {
+    console.log('Nenhum cliente encontrado para sincronizar.');
+    return;
+  }
+
+  const tamanhoLote = 500;
+
+  for (let i = 0; i < registros.length; i += tamanhoLote) {
+    const lote = registros.slice(i, i + tamanhoLote);
+
+    const { error } = await supabase
+      .from('tab_cliente')
+      .upsert(lote, {
+        onConflict: 'id_empresa,id_cliente'
+      });
+
+    if (error) {
+      console.error('Erro ao enviar lote de clientes para o Supabase:', error);
+      throw error;
+    }
+
+    console.log(`Lote clientes enviado: ${i + lote.length}/${registros.length}`);
   }
 }
 
@@ -464,6 +507,24 @@ function filtroModoSql(modoSincronizacao) {
         WHERE B3.ID_CTAREC = CR.ID_CTAREC
           AND B3.DT_BAIXA >= DATEADD(-30 DAY TO CURRENT_DATE)
       )
+  `;
+}
+
+function sqlClientes() {
+  return `
+    SELECT
+      C.ID_CLIENTE,
+      C.DT_CADASTRO,
+      C.NOME,
+      C.DT_PRICOMP,
+      C.DT_ULTCOMP,
+      C.DDD_CELUL,
+      C.FONE_CELUL,
+      C.EMAIL_CONT,
+      PF.DT_NASCTO
+    FROM TB_CLIENTE C
+    LEFT JOIN TB_CLI_PF PF ON PF.ID_CLIENTE = C.ID_CLIENTE
+    ORDER BY C.NOME
   `;
 }
 
@@ -748,9 +809,9 @@ function sqlSemBaixa(modoSincronizacao) {
   `;
 }
 
-async function consultarComFallback(db, modoSincronizacao) {
+async function consultarContasReceberComFallback(db, modoSincronizacao) {
   try {
-    console.log('Tentando consulta com baixa e vendedor por FUN.VENDEDOR...');
+    console.log('Tentando consulta contas a receber com baixa e vendedor por FUN.VENDEDOR...');
     return await consultarFirebird(db, sqlComVendedorPorCampoVendedor(modoSincronizacao));
   } catch (error) {
     console.error('Falhou usando baixa + FUN.VENDEDOR.');
@@ -758,7 +819,7 @@ async function consultarComFallback(db, modoSincronizacao) {
   }
 
   try {
-    console.log('Tentando consulta com baixa e vendedor por FUN.ID_FUNCIONARIO...');
+    console.log('Tentando consulta contas a receber com baixa e vendedor por FUN.ID_FUNCIONARIO...');
     return await consultarFirebird(db, sqlComVendedorPorIdFuncionario(modoSincronizacao));
   } catch (error) {
     console.error('Falhou usando baixa + FUN.ID_FUNCIONARIO.');
@@ -766,15 +827,65 @@ async function consultarComFallback(db, modoSincronizacao) {
   }
 
   try {
-    console.log('Tentando consulta com baixa e sem vendedor...');
+    console.log('Tentando consulta contas a receber com baixa e sem vendedor...');
     return await consultarFirebird(db, sqlSemVendedor(modoSincronizacao));
   } catch (error) {
     console.error('Falhou usando baixa sem vendedor.');
     console.error(error.message || error);
   }
 
-  console.log('Subindo dados sem baixa e sem vendedor para não parar a sincronização...');
+  console.log('Subindo contas a receber sem baixa e sem vendedor para não parar a sincronização...');
   return await consultarFirebird(db, sqlSemBaixa(modoSincronizacao));
+}
+
+async function sincronizarClientes(db, idEmpresa) {
+  console.log('');
+  console.log('----------------------------------------');
+  console.log('Sincronizando Clientes');
+  console.log('Consultando TB_CLIENTE + TB_CLI_PF...');
+  console.log('----------------------------------------');
+
+  const resultado = await consultarFirebird(db, sqlClientes());
+
+  console.log(`Clientes encontrados no Firebird: ${resultado.length}`);
+
+  const registros = resultado
+    .map((row) => montarRegistroCliente(row, idEmpresa))
+    .filter((row) => row.id_cliente !== null && row.id_cliente !== undefined && row.nome);
+
+  if (registros.length > 0) {
+    console.log('Primeiro cliente montado para envio:');
+    console.log(JSON.stringify(registros[0], null, 2));
+  }
+
+  console.log('Enviando clientes para o Supabase...');
+  await enviarClientesParaSupabase(registros);
+
+  console.log('Sincronização de clientes concluída.');
+}
+
+async function sincronizarContasReceber(db, idEmpresa, modoSincronizacao) {
+  console.log('');
+  console.log('----------------------------------------');
+  console.log('Sincronizando Contas a Receber');
+  console.log('Consultando TB_CONTA_RECEBER...');
+  console.log('----------------------------------------');
+
+  const resultado = await consultarContasReceberComFallback(db, modoSincronizacao);
+
+  console.log(`Contas a receber encontradas no Firebird: ${resultado.length}`);
+
+  const registros = resultado.map((row) => montarRegistroContaReceber(row, idEmpresa));
+
+  if (registros.length > 0) {
+    console.log('Primeira conta a receber montada para envio:');
+    console.log(JSON.stringify(registros[0], null, 2));
+  }
+
+  console.log('Enviando contas a receber para o Supabase...');
+  await enviarContasReceberParaSupabase(registros);
+
+  console.log('Sincronização de contas a receber concluída.');
 }
 
 function obterDataAtualChave() {
@@ -825,15 +936,17 @@ async function sincronizar(modoForcado = null) {
   try {
     console.log('');
     console.log('========================================');
-    console.log(`Iniciando sincronização Contas a Receber - ${new Date().toLocaleString('pt-BR')}`);
+    console.log(`Iniciando sincronização - ${new Date().toLocaleString('pt-BR')}`);
     console.log(`Modo: ${modoSincronizacao.toUpperCase()}`);
     console.log('Firebird -> Supabase');
+    console.log('Módulos: Clientes + Contas a Receber');
     console.log('========================================');
 
     if (modoSincronizacao === 'parcial') {
-      console.log('Filtro parcial: contas em aberto e contas baixadas nos últimos 30 dias.');
+      console.log('Contas a receber parcial: contas em aberto e contas baixadas nos últimos 30 dias.');
+      console.log('Clientes: sincronização completa da TB_CLIENTE em todo ciclo.');
     } else {
-      console.log('Sincronização completa: toda a TB_CONTA_RECEBER será revisada.');
+      console.log('Sincronização completa: toda a TB_CLIENTE e toda a TB_CONTA_RECEBER serão revisadas.');
     }
 
     console.log('Conectando ao Firebird...');
@@ -845,28 +958,15 @@ async function sincronizar(modoForcado = null) {
 
     const idEmpresa = await obterIdEmpresaAtual(db);
 
-    console.log('Consultando TB_CONTA_RECEBER...');
-
-    const resultado = await consultarComFallback(db, modoSincronizacao);
-
-    console.log(`Registros encontrados no Firebird: ${resultado.length}`);
-
-    const registros = resultado.map((row) => montarRegistro(row, idEmpresa));
-
-    if (registros.length > 0) {
-      console.log('Primeiro registro montado para envio:');
-      console.log(JSON.stringify(registros[0], null, 2));
-    }
-
-    console.log('Enviando registros para o Supabase...');
-    await enviarParaSupabase(registros);
+    await sincronizarClientes(db, idEmpresa);
+    await sincronizarContasReceber(db, idEmpresa, modoSincronizacao);
 
     if (modoSincronizacao === 'completa') {
       ultimaSincronizacaoCompletaDia = obterDataAtualChave();
       console.log(`Sincronização completa registrada para o dia ${ultimaSincronizacaoCompletaDia}.`);
     }
 
-    console.log(`Sincronização ${modoSincronizacao} concluída com sucesso - ${new Date().toLocaleString('pt-BR')}`);
+    console.log(`Sincronização concluída com sucesso - ${new Date().toLocaleString('pt-BR')}`);
   } catch (error) {
     console.error('Erro geral na sincronização:', error);
   } finally {
@@ -887,9 +987,9 @@ async function sincronizar(modoForcado = null) {
 
 async function iniciarSincronizadorContinuo() {
   console.log('========================================');
-  console.log('Sincronizador Contas a Receber iniciado');
+  console.log('Sincronizador Firebird -> Supabase iniciado');
   console.log(`Intervalo durante o dia: ${INTERVALO_MINUTOS} minuto(s)`);
-  console.log('Modo parcial: contas em aberto e contas baixadas nos últimos 30 dias');
+  console.log('Módulos: Clientes + Contas a Receber');
   console.log(`Sincronização completa diária: ${String(HORA_SINCRONIZACAO_COMPLETA).padStart(2, '0')}:00`);
   console.log('Modo: contínuo');
   console.log('========================================');

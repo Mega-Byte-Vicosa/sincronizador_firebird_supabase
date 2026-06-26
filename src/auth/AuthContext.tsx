@@ -21,12 +21,23 @@ interface AuthResult {
   message?: string;
   session_token?: string;
   usuario?: UsuarioSaas;
+  cliente?: unknown;
+}
+
+interface AtualizarPermissoesClienteParams {
+  idCliente: string | number;
+  permiteCampanha: boolean;
+  permiteCobrancaAviso: boolean;
+  contatoRestrito: boolean;
+  motivoRestricao: string | null;
 }
 
 interface AuthContextValue {
   usuario: UsuarioSaas | null;
   carregando: boolean;
   entrar: (cnpj: string, usuario: string, senha: string) => Promise<AuthResult>;
+  alterarSenha: (senhaAtual: string, novaSenha: string) => Promise<AuthResult>;
+  atualizarPermissoesCliente: (params: AtualizarPermissoesClienteParams) => Promise<AuthResult>;
   sair: () => Promise<void>;
 }
 
@@ -96,6 +107,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return resultado;
   }
 
+  async function alterarSenha(senhaAtual: string, novaSenha: string) {
+    const token = sessionStorage.getItem(SESSION_KEY);
+
+    if (!token) {
+      return {
+        success: false,
+        message: "Sessão expirada. Faça login novamente.",
+      };
+    }
+
+    const { data, error } = await supabase.rpc("alterar_senha_usuario_saas", {
+      p_token: token,
+      p_senha_atual: senhaAtual,
+      p_nova_senha: novaSenha,
+    });
+
+    if (error) {
+      return {
+        success: false,
+        message: "Não foi possível alterar a senha.",
+      };
+    }
+
+    return data as AuthResult;
+  }
+
+  async function atualizarPermissoesCliente(params: AtualizarPermissoesClienteParams) {
+    const token = sessionStorage.getItem(SESSION_KEY);
+
+    if (!token) {
+      return {
+        success: false,
+        message: "Sessão expirada. Faça login novamente.",
+      };
+    }
+
+    const { data, error } = await supabase.rpc("atualizar_permissoes_cliente_saas", {
+      p_token: token,
+      p_id_cliente: String(params.idCliente),
+      p_permite_campanha: params.permiteCampanha,
+      p_permite_cobranca_aviso: params.permiteCobrancaAviso,
+      p_contato_restrito: params.contatoRestrito,
+      p_motivo_restricao: params.motivoRestricao,
+    });
+
+    if (error) {
+      return {
+        success: false,
+        message: "Não foi possível atualizar as permissões de contato. Tente novamente.",
+      };
+    }
+
+    return data as AuthResult;
+  }
+
   async function sair() {
     const token = sessionStorage.getItem(SESSION_KEY);
 
@@ -114,6 +180,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       usuario,
       carregando,
       entrar,
+      alterarSenha,
+      atualizarPermissoesCliente,
       sair,
     }),
     [usuario, carregando],

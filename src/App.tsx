@@ -5,6 +5,7 @@ import { CampanhasPromocao } from "./pages/CampanhasPromocao";
 import { Configuracoes } from "./pages/Configuracoes";
 import { ContasAReceber } from "./pages/ContasAReceber";
 import { Dashboard } from "./pages/Dashboard";
+import { Clientes } from "./pages/Clientes";
 import { HistoricoEnvios } from "./pages/HistoricoEnvios";
 import { MensagensProgramadas } from "./pages/MensagensProgramadas";
 import { Login } from "./pages/Login";
@@ -45,6 +46,7 @@ export function App() {
   }
 
   const page = useMemo(() => {
+    if (pathname === "/clientes") return <Clientes />;
     if (pathname === "/contas-a-receber") return <ContasAReceber />;
     if (pathname === "/aniversariantes") return <Aniversariantes />;
     if (pathname === "/campanhas-promocao") return <CampanhasPromocao />;

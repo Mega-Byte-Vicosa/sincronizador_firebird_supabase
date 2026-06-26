@@ -78,6 +78,22 @@ async function validarConsentimentoCliente(
   const registro = data as Record<string, unknown>;
   const camposAutorizacao = ["aceita_whatsapp", "recebe_whatsapp", "opt_in_whatsapp", "whatsapp_autorizado"];
   const camposBloqueio = ["bloquear_whatsapp", "nao_enviar_whatsapp"];
+  const idCliente = registro.id_cliente;
+
+  if (idCliente !== null && idCliente !== undefined) {
+    const { data: clienteData, error: clienteError } = await supabase
+      .from("tab_cliente")
+      .select("permite_cobranca_aviso, contato_restrito")
+      .eq("id_empresa", mensagem.id_empresa)
+      .eq("id_cliente", idCliente)
+      .maybeSingle();
+
+    if (clienteError) throw new Error(`Não foi possível validar as permissões do cliente: ${clienteError.message}`);
+
+    const cliente = clienteData as { permite_cobranca_aviso?: boolean | null; contato_restrito?: boolean | null } | null;
+    if (cliente?.contato_restrito) return "Cliente está com contato restrito.";
+    if (cliente?.permite_cobranca_aviso === false) return "Cliente não permite cobranças e avisos.";
+  }
 
   for (const campo of camposAutorizacao) {
     if (campo in registro && valorBooleano(registro[campo]) === false) {

@@ -132,6 +132,29 @@ async function registrarHistorico(
   return data?.id ?? null;
 }
 
+async function validarPermissaoCobrancaAviso(
+  supabase: ReturnType<typeof createSupabaseAdmin>,
+  idEmpresa: string,
+  conta: Record<string, any>,
+) {
+  if (conta.id_cliente === null || conta.id_cliente === undefined) return null;
+
+  const { data, error } = await supabase
+    .from("tab_cliente")
+    .select("permite_cobranca_aviso, contato_restrito")
+    .eq("id_empresa", idEmpresa)
+    .eq("id_cliente", conta.id_cliente)
+    .maybeSingle();
+
+  if (error) throw new Error(`Não foi possível validar as permissões do cliente: ${error.message}`);
+
+  const cliente = data as { permite_cobranca_aviso?: boolean | null; contato_restrito?: boolean | null } | null;
+  if (cliente?.contato_restrito) return "Cliente está com contato restrito.";
+  if (cliente?.permite_cobranca_aviso === false) return "Cliente não permite cobranças e avisos.";
+
+  return null;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ success: false, message: "Método não permitido." }, 405);
@@ -185,6 +208,9 @@ Deno.serve(async (req) => {
     }
 
     conta.cliente_telefone = telefonePayload || conta.cliente_telefone;
+
+    const erroPermissao = await validarPermissaoCobrancaAviso(supabase, idEmpresa, conta);
+    if (erroPermissao) throw new Error(erroPermissao);
 
 const { data: config, error: configError } = await supabase
   .from("tab_btzap_config")
