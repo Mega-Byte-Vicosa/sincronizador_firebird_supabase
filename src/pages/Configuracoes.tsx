@@ -154,6 +154,7 @@ export function Configuracoes() {
   const [formatoPayload, setFormatoPayload] = useState("btzap");
   const [tokenInstancia, setTokenInstancia] = useState("");
   const [ativo, setAtivo] = useState(true);
+  const [configEncontrada, setConfigEncontrada] = useState(false);
 
   const [salvando, setSalvando] = useState(false);
   const [testando, setTestando] = useState(false);
@@ -177,12 +178,34 @@ export function Configuracoes() {
     setDadosInstancia(dados);
   }
 
+  function limparFormularioConfiguracao() {
+    setNomeInstancia("");
+    setUrlServidor("");
+    setEndpointEnvioTexto("/send/text");
+    setMetodoEnvioTexto("POST");
+    setFormatoPayload("btzap");
+    setTokenInstancia("");
+    setAtivo(true);
+    setConfigEncontrada(false);
+    definirDadosInstancia(null);
+    setMensagemInstancia("WhatsApp não configurado para esta empresa.");
+    setErroInstancia(null);
+  }
+
  async function carregarConfiguracoes() {
   setCarregandoConfiguracoes(true);
   setErro(null);
+  setMensagem(null);
+
+  if (!usuario?.id_empresa) {
+    limparFormularioConfiguracao();
+    setErro("Empresa da sessão não identificada.");
+    setCarregandoConfiguracoes(false);
+    return;
+  }
 
   const { data, error } = await supabase.functions.invoke("btzap-get-config", {
-    body: { id_empresa: usuario?.id_empresa },
+    body: { id_empresa: usuario.id_empresa },
   });
 
   if (error) {
@@ -204,14 +227,14 @@ export function Configuracoes() {
   }
 
   if (!data?.config) {
-    console.error("btzap-get-config retornou sem config:", data);
-    definirDadosInstancia(null);
-    setMensagemInstancia(null);
+    limparFormularioConfiguracao();
+    setMensagem(data?.message ?? "Nenhuma configuração BTZap cadastrada para esta empresa.");
     setCarregandoConfiguracoes(false);
     return;
   }
 
   const config = data.config as BtzapConfigData;
+  setConfigEncontrada(true);
 
   console.log("Configuração BTZap carregada pela Edge:", config);
 
@@ -221,6 +244,7 @@ export function Configuracoes() {
   setMetodoEnvioTexto(config.metodo_envio_texto ?? "POST");
   setFormatoPayload(config.formato_payload ?? "btzap");
   setAtivo(config.ativo !== false);
+  setTokenInstancia("");
 
   const dadosSalvos = montarStatusSalvoWhatsapp(config);
 
@@ -239,11 +263,16 @@ export function Configuracoes() {
       return;
     }
 
+    if (!usuario?.id_empresa) {
+      setErro("Empresa da sessão não identificada.");
+      return;
+    }
+
     setSalvando(true);
 
     const { data, error } = await supabase.functions.invoke("btzap-save-config", {
       body: {
-        id_empresa: usuario?.id_empresa,
+        id_empresa: usuario.id_empresa,
         nome_instancia: nomeInstancia.trim(),
         token_instancia: tokenInstancia.trim(),
         url_servidor: urlServidor.trim(),
@@ -274,10 +303,21 @@ export function Configuracoes() {
   async function testarConexao() {
     setMensagem(null);
     setErro(null);
+
+    if (!usuario?.id_empresa) {
+      setErro("Empresa da sessão não identificada.");
+      return;
+    }
+
+    if (!configEncontrada) {
+      setErro("Nenhuma configuração BTZap cadastrada para esta empresa.");
+      return;
+    }
+
     setTestando(true);
 
     const { data, error } = await supabase.functions.invoke("btzap-test-connection", {
-      body: { id_empresa: usuario?.id_empresa },
+      body: { id_empresa: usuario.id_empresa },
     });
 
     setTestando(false);
@@ -305,7 +345,7 @@ export function Configuracoes() {
     }
 
     if (!data) {
-      return "Status ainda não consultado";
+      return "WhatsApp não configurado para esta empresa.";
     }
 
     if (isInstanciaConectada(data)) {
@@ -338,11 +378,17 @@ export function Configuracoes() {
 
   async function gerarQrCode() {
     setErroInstancia(null);
+
+    if (!usuario?.id_empresa || !configEncontrada) {
+      setErroInstancia("WhatsApp não configurado para esta empresa.");
+      return;
+    }
+
     setGerandoQrCode(true);
 
     const { data, error } = await supabase.functions.invoke("btzap-connect-instance", {
       body: {
-        id_empresa: usuario?.id_empresa,
+        id_empresa: usuario.id_empresa,
         phone: telefoneConexao.trim(),
       },
     });
@@ -376,13 +422,20 @@ export function Configuracoes() {
   }
 
   async function atualizarStatusInstancia(silencioso = false) {
+    if (!usuario?.id_empresa || !configEncontrada) {
+      if (!silencioso) {
+        setErroInstancia("WhatsApp não configurado para esta empresa.");
+      }
+      return;
+    }
+
     if (!silencioso) {
       setErroInstancia(null);
       setAtualizandoStatus(true);
     }
 
     const { data, error } = await supabase.functions.invoke("btzap-instance-status", {
-      body: { id_empresa: usuario?.id_empresa },
+      body: { id_empresa: usuario.id_empresa },
     });
 
     if (!silencioso) {
@@ -455,6 +508,21 @@ export function Configuracoes() {
       <section className="settings-panel">
         <div className="panel-title">
           <h2>Configuração BTZap / WhatsApp</h2>
+        </div>
+
+        <div className="btzap-debug-card" aria-label="Diagnóstico da configuração BTZap">
+          <div>
+            <span>Empresa atual</span>
+            <strong>{usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social || usuario?.cnpj || "-"}</strong>
+          </div>
+          <div>
+            <span>id_empresa atual</span>
+            <strong>{usuario?.id_empresa || "-"}</strong>
+          </div>
+          <div>
+            <span>Configuração BTZap encontrada</span>
+            <strong>{configEncontrada ? "Sim" : "Não"}</strong>
+          </div>
         </div>
 
         <div className="btzap-form">

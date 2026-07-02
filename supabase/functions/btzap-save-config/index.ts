@@ -1,10 +1,8 @@
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { createSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 
-const EMPRESA_PADRAO_ID = "00000000-0000-0000-0000-000000000001";
-
 function obterIdEmpresa(payload: Record<string, unknown>) {
-  return String(payload.id_empresa || payload.idEmpresa || EMPRESA_PADRAO_ID).trim();
+  return String(payload.id_empresa || payload.idEmpresa || "").trim();
 }
 
 Deno.serve(async (req) => {
@@ -62,9 +60,13 @@ Deno.serve(async (req) => {
         .eq("id_empresa", idEmpresa);
       if (error) throw error;
     } else {
+      if (!tokenInstancia) {
+        return jsonResponse({ success: false, message: "Token da instância é obrigatório para cadastrar a configuração BTZap desta empresa." }, 400);
+      }
+
       const { error } = await supabase.from("tab_btzap_config").insert({
         ...configData,
-        token_instancia: tokenInstancia || null,
+        token_instancia: tokenInstancia,
         criado_em: new Date().toISOString(),
       });
       if (error) throw error;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AppLayout } from "./components/layout/AppLayout";
-import { Aniversariantes } from "./pages/Aniversariantes";
+import { Automacoes } from "./pages/Automacoes";
 import { CampanhasPromocao } from "./pages/CampanhasPromocao";
 import { Configuracoes } from "./pages/Configuracoes";
 import { ContasAReceber } from "./pages/ContasAReceber";
@@ -8,11 +8,13 @@ import { Dashboard } from "./pages/Dashboard";
 import { Clientes } from "./pages/Clientes";
 import { HistoricoEnvios } from "./pages/HistoricoEnvios";
 import { MensagensProgramadas } from "./pages/MensagensProgramadas";
+import { ModelosMensagem } from "./pages/ModelosMensagem";
 import { Login } from "./pages/Login";
 import { useAuth } from "./auth/AuthContext";
 
 function normalizarRota(pathname: string) {
   if (pathname === "/") return "/dashboard";
+  if (pathname === "/aniversariantes") return "/automacoes";
   return pathname;
 }
 
@@ -48,8 +50,9 @@ export function App() {
   const page = useMemo(() => {
     if (pathname === "/clientes") return <Clientes />;
     if (pathname === "/contas-a-receber") return <ContasAReceber />;
-    if (pathname === "/aniversariantes") return <Aniversariantes />;
+    if (pathname === "/automacoes") return <Automacoes />;
     if (pathname === "/campanhas-promocao") return <CampanhasPromocao />;
+    if (pathname === "/campanhas-promocao/modelos") return <ModelosMensagem />;
     if (pathname === "/mensagens-programadas") return <MensagensProgramadas />;
     if (pathname === "/historico-envios") return <HistoricoEnvios />;
     if (pathname === "/configuracoes") return <Configuracoes />;

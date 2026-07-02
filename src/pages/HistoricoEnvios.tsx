@@ -38,7 +38,7 @@ const filtrosIniciais: FiltrosHistorico = {
   dataFinal: getUltimoDiaMesAtual(),
   origem: "todas",
   tipoEnvio: "todos",
-  status: "enviado",
+  status: "todos",
 };
 
 function mostrarValor(valor: string | number | null | undefined) {
@@ -78,7 +78,7 @@ function getStatusClass(status: string | null) {
   const statusNormalizado = String(status ?? "").trim().toLowerCase();
 
   if (statusNormalizado === "enviado") return "history-status history-status-enviado";
-  if (statusNormalizado === "erro") return "history-status history-status-erro";
+  if (["erro", "falhou", "falha"].includes(statusNormalizado)) return "history-status history-status-erro";
   if (statusNormalizado === "enviando") return "history-status history-status-enviando";
   if (statusNormalizado === "cancelado") return "history-status history-status-cancelado";
   if (statusNormalizado === "pendente") return "history-status history-status-pendente";
@@ -122,19 +122,27 @@ function dataDiaSeguinte(data: string) {
   return valor;
 }
 
-function origemCompativel(origem: string | null, origemSelecionada: string) {
+function origemCompativel(envio: WhatsappEnvio, origemSelecionada: string) {
   if (origemSelecionada === "todas") return true;
 
-  const origemNormalizada = normalizarOpcao(origem);
+  const origemNormalizada = normalizarOpcao(envio.origem);
+  const origemModuloNormalizada = normalizarOpcao(envio.origem_modulo);
+  const origemEnvioNormalizada = normalizarOpcao(envio.origem_envio);
   const aliases: Record<string, string[]> = {
     contas_receber: ["contasareceber", "contasreceber"],
     aniversariantes: ["aniversariantes"],
-    campanhas_promocao: ["campanhadepromocao", "campanhasdepromocao", "campanhaspromocao", "campanhapromocao"],
+    campanhas_promocao: ["campanha", "campanhadepromocao", "campanhasdepromocao", "campanhaspromocao", "campanhapromocao"],
+    automacao: ["automacao", "campanhaautomatizada"],
     mensagem_programada: ["mensagemprogramada"],
     manual: ["manual"],
   };
 
-  return (aliases[origemSelecionada] ?? [origemSelecionada]).includes(origemNormalizada);
+  const opcoes = aliases[origemSelecionada] ?? [origemSelecionada];
+  return (
+    opcoes.includes(origemNormalizada) ||
+    opcoes.includes(origemModuloNormalizada) ||
+    opcoes.includes(origemEnvioNormalizada)
+  );
 }
 
 function filtrosAtivos(filtros: FiltrosHistorico) {
@@ -175,20 +183,33 @@ function filtrarEnvios(envios: WhatsappEnvio[], filtros: FiltrosHistorico) {
 
     if (filtros.origem === "mensagem_programada") {
       if (envio.origem_envio !== "MENSAGEM_PROGRAMADA") return false;
-    } else if (!origemCompativel(envio.origem, filtros.origem)) {
+    } else if (!origemCompativel(envio, filtros.origem)) {
       return false;
     }
     if (filtros.tipoEnvio !== "todos" && normalizarTexto(envio.tipo_envio) !== filtros.tipoEnvio) return false;
-    if (filtros.status !== "todos" && normalizarTexto(envio.status) !== filtros.status) return false;
+    const statusNormalizado = normalizarTexto(envio.status);
+    const statusFiltro =
+      filtros.status === "erro"
+        ? ["erro", "falhou", "falha"]
+        : filtros.status === "enviado"
+          ? ["enviado"]
+          : [filtros.status];
+    if (filtros.status !== "todos" && !statusFiltro.includes(statusNormalizado)) return false;
 
     return true;
   });
 }
 
 function formatarOrigemHistorico(envio: WhatsappEnvio) {
+  if (envio.origem_modulo === "AUTOMACAO" || envio.origem_envio === "CAMPANHA_AUTOMATIZADA") return "Automação";
   if (envio.origem_envio === "MENSAGEM_PROGRAMADA") {
+    if (envio.origem_modulo === "CAMPANHA") return "Campanha";
     const modulo = envio.origem_modulo === "CONTA_RECEBER" ? "Conta a Receber" : mostrarValor(envio.origem_modulo);
     return `Mensagem Programada / ${modulo}`;
+  }
+
+  if (envio.origem_modulo === "CAMPANHA" || normalizarOpcao(envio.origem) === "campanha") {
+    return "Campanha";
   }
 
   return mostrarValor(envio.origem);
@@ -236,19 +257,19 @@ export function HistoricoEnvios() {
 
   const resumo = useMemo(
     () => ({
-      enviadosHoje: enviosFiltrados.filter((envio) => envio.status === "enviado").length,
-      erros: enviosFiltrados.filter((envio) => envio.status === "erro").length,
-      pendentes: enviosFiltrados.filter((envio) => envio.status === "pendente").length,
+      enviadosHoje: enviosFiltrados.filter((envio) => normalizarTexto(envio.status) === "enviado").length,
+      erros: enviosFiltrados.filter((envio) => ["erro", "falhou", "falha"].includes(normalizarTexto(envio.status))).length,
+      pendentes: enviosFiltrados.filter((envio) => normalizarTexto(envio.status) === "pendente").length,
       total: enviosFiltrados.length,
     }),
     [enviosFiltrados],
   );
 
   const cards = [
-    { label: "Mensagens enviadas", value: resumo.enviadosHoje, icon: "sent", color: "success", help: "Envios concluidos" },
-    { label: "Mensagens com erro", value: resumo.erros, icon: "error", color: "danger", help: "Falhas registradas" },
-    { label: "Mensagens pendentes", value: resumo.pendentes, icon: "pending", color: "warning", help: "Aguardando envio" },
-    { label: "Total de envios", value: resumo.total, icon: "list", color: "primary", help: "Registros filtrados" },
+    { label: "Mensagens enviadas", value: resumo.enviadosHoje, icon: "sent", color: "verde", help: "Envios concluídos" },
+    { label: "Mensagens com erro", value: resumo.erros, icon: "error", color: "vermelho", help: "Falhas registradas" },
+    { label: "Mensagens pendentes", value: resumo.pendentes, icon: "pending", color: "laranja", help: "Aguardando envio" },
+    { label: "Total de envios", value: resumo.total, icon: "list", color: "azul", help: "Registros filtrados" },
   ];
 
   return (
@@ -263,25 +284,20 @@ export function HistoricoEnvios() {
         </button>
       </header>
 
-      <section className="dashboard-card-grid" aria-label="Resumo de envios">
+      <section className="summary-grid history-summary-grid" aria-label="Resumo de envios">
         {cards.map((card) => (
-          <article className={`dashboard-card dashboard-card-with-icon metric-card metric-card-${card.color}`} key={card.label}>
+          <article className={`summary-card summary-card-${card.color}`} key={card.label}>
             <div>
               <span>{card.label}</span>
               <strong>{carregando ? "..." : card.value}</strong>
               <small>{card.help}</small>
             </div>
-            <div className="dashboard-card-icon" aria-hidden="true"><MetricCardIcon type={card.icon} /></div>
+            <div className="summary-card-icon" aria-hidden="true"><MetricCardIcon type={card.icon} /></div>
           </article>
         ))}
       </section>
 
       <section className="history-filters-panel" aria-label="Filtros do historico">
-        <div className="panel-title history-filters-title">
-          <h2>Filtros</h2>
-          <span>Resultados: {enviosFiltrados.length}</span>
-        </div>
-
         <div className="history-filters-grid">
           <label className="history-filter-search">
             <span>Buscar</span>
@@ -318,6 +334,7 @@ export function HistoricoEnvios() {
               <option value="contas_receber">Contas a Receber</option>
               <option value="aniversariantes">Aniversariantes</option>
               <option value="campanhas_promocao">Campanha de Promocao</option>
+              <option value="automacao">Automação</option>
               <option value="mensagem_programada">Mensagem Programada</option>
               <option value="manual">Manual</option>
             </select>
@@ -330,6 +347,7 @@ export function HistoricoEnvios() {
               onChange={(event) => setFiltros({ ...filtros, tipoEnvio: event.target.value })}
             >
               <option value="todos">Todos</option>
+              <option value="whatsapp">WhatsApp</option>
               <option value="envio">Envio</option>
               <option value="reenvio">Reenvio</option>
               <option value="teste">Teste</option>

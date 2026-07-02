@@ -1,11 +1,9 @@
-import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
+﻿import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { testBtzapConnection } from "../_shared/btzapClient.ts";
 import { createSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 
-const EMPRESA_PADRAO_ID = "00000000-0000-0000-0000-000000000001";
-
 function obterIdEmpresa(payload: Record<string, unknown>) {
-  return String(payload.id_empresa || payload.idEmpresa || EMPRESA_PADRAO_ID).trim();
+  return String(payload.id_empresa || payload.idEmpresa || "").trim();
 }
 
 Deno.serve(async (req) => {
@@ -15,6 +13,10 @@ Deno.serve(async (req) => {
   try {
     const payload = await req.json().catch(() => ({}));
     const idEmpresa = obterIdEmpresa(payload);
+    if (!idEmpresa) {
+      return jsonResponse({ success: false, message: "Empresa da sessão não identificada." }, 400);
+    }
+
     const supabase = createSupabaseAdmin();
 
     const { data: config, error } = await supabase
@@ -27,7 +29,7 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (error) throw error;
-    if (!config) return jsonResponse({ success: false, message: "Token da instância não configurado." });
+    if (!config) return jsonResponse({ success: false, message: "Nenhuma configuração BTZap cadastrada para esta empresa." });
 
     const result = await testBtzapConnection(config);
     return jsonResponse(result);

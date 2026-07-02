@@ -74,10 +74,27 @@ const mesesAno = [
   ["Dez", "Dezembro"],
 ] as const;
 
+function intervaloMesAtual() {
+  const hoje = new Date();
+  const ano = hoje.getFullYear();
+  const mes = hoje.getMonth();
+  const formatar = (data: Date) =>
+    `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, "0")}-${String(data.getDate()).padStart(2, "0")}`;
+
+  return {
+    inicio: formatar(new Date(ano, mes, 1)),
+    fim: formatar(new Date(ano, mes + 1, 0)),
+  };
+}
+
+type FiltroCardMensagem = "padrao" | "todos" | "PENDENTE" | "AGENDADO" | "ENVIADO" | "ERRO";
+
+const mesAtual = intervaloMesAtual();
+
 const filtrosIniciais: FiltrosMensagensProgramadas = {
   busca: "",
-  dataInicial: "",
-  dataFinal: "",
+  dataInicial: mesAtual.inicio,
+  dataFinal: mesAtual.fim,
   origemModulo: "todos",
   tipoAgendamento: "todos",
   status: "todos",
@@ -314,6 +331,7 @@ function gerarDatasProgramadas(form: FormMensagemProgramada): DataProgramada[] {
 function filtrarMensagensProgramadas(
   mensagens: MensagemProgramada[],
   filtros: FiltrosMensagensProgramadas,
+  aplicarFiltroDatas = true,
 ) {
   const busca = normalizarTexto(filtros.busca);
   const buscaTelefone = normalizarTelefone(filtros.busca);
@@ -333,15 +351,24 @@ function filtrarMensagensProgramadas(
       if (!encontrouTexto && !encontrouTelefone) return false;
     }
 
-    const dataEnvio = mensagem.executar_em ? new Date(mensagem.executar_em) : dataInicioDia(mensagem.data_envio);
-    if (inicio && dataEnvio < inicio) return false;
-    if (fim && dataEnvio >= fim) return false;
+    if (aplicarFiltroDatas) {
+      const dataEnvio = mensagem.executar_em ? new Date(mensagem.executar_em) : dataInicioDia(mensagem.data_envio);
+      if (inicio && dataEnvio < inicio) return false;
+      if (fim && dataEnvio >= fim) return false;
+    }
     if (filtros.origemModulo !== "todos" && mensagem.origem_modulo !== filtros.origemModulo) return false;
     if (filtros.tipoAgendamento !== "todos" && mensagem.tipo_agendamento !== filtros.tipoAgendamento) return false;
     if (filtros.status !== "todos" && mensagem.status !== filtros.status) return false;
 
     return true;
   });
+}
+
+function mensagemAtendeFiltroCard(mensagem: MensagemProgramada, filtro: FiltroCardMensagem) {
+  if (filtro === "todos") return true;
+  const status = normalizarTexto(mensagem.status);
+  if (filtro === "padrao") return ["pendente", "agendado", "enviado"].includes(status);
+  return status === normalizarTexto(filtro);
 }
 
 function validarMensagemProgramada(form: FormMensagemProgramada) {
@@ -421,6 +448,7 @@ export function MensagensProgramadas() {
   const [executando, setExecutando] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  const [filtroCard, setFiltroCard] = useState<FiltroCardMensagem>("padrao");
   const processandoAutomaticamente = useRef(false);
 
   const listarMensagensProgramadas = useCallback(async () => {
@@ -438,7 +466,8 @@ export function MensagensProgramadas() {
       .select("*")
       .eq("id_empresa", usuario.id_empresa)
       .eq("ativo", true)
-      .order("executar_em", { ascending: true });
+      .order("executar_em", { ascending: false, nullsFirst: false })
+      .order("criado_em", { ascending: false });
 
     if (error) {
       setMensagens([]);
@@ -455,8 +484,11 @@ export function MensagensProgramadas() {
   }, [listarMensagensProgramadas]);
 
   const mensagensFiltradas = useMemo(
-    () => filtrarMensagensProgramadas(mensagens, filtros),
-    [filtros, mensagens],
+    () =>
+      filtrarMensagensProgramadas(mensagens, filtros, filtroCard === "padrao").filter((mensagem) =>
+        mensagemAtendeFiltroCard(mensagem, filtroCard),
+      ),
+    [filtroCard, filtros, mensagens],
   );
 
   const resumo = useMemo(
@@ -732,11 +764,11 @@ export function MensagensProgramadas() {
   }, [executarMensagensProgramadas]);
 
   const cards = [
-    { label: "Pendentes", value: resumo.pendentes, icon: "pending", color: "warning", help: "Aguardando processamento" },
-    { label: "Agendadas", value: resumo.agendadas, icon: "calendar", color: "primary", help: "Programadas para envio" },
-    { label: "Enviadas", value: resumo.enviadas, icon: "sent", color: "success", help: "Concluidas com sucesso" },
-    { label: "Com erro", value: resumo.erros, icon: "error", color: "danger", help: "Precisam de atencao" },
-    { label: "Total", value: resumo.total, icon: "list", color: "info", help: "Todos os agendamentos" },
+    { label: "Pendentes", value: resumo.pendentes, icon: "pending", color: "laranja", help: "Aguardando processamento", filtro: "PENDENTE" as const },
+    { label: "Agendadas", value: resumo.agendadas, icon: "calendar", color: "azul", help: "Programadas para envio", filtro: "AGENDADO" as const },
+    { label: "Enviadas", value: resumo.enviadas, icon: "sent", color: "verde", help: "Concluídas com sucesso", filtro: "ENVIADO" as const },
+    { label: "Com erro", value: resumo.erros, icon: "error", color: "vermelho", help: "Precisam de atenção", filtro: "ERRO" as const },
+    { label: "Total", value: resumo.total, icon: "list", color: "ciano", help: "Todos os agendamentos", filtro: "todos" as const },
   ];
 
   return (
@@ -764,17 +796,32 @@ export function MensagensProgramadas() {
         </div>
       </header>
 
-      <section className="dashboard-card-grid" aria-label="Resumo de mensagens programadas">
-        {cards.map((card) => (
-          <article className={`dashboard-card dashboard-card-with-icon metric-card metric-card-${card.color}`} key={card.label}>
+      <section className="summary-grid scheduled-summary-grid" aria-label="Resumo de mensagens programadas">
+        {cards.map((card) => {
+          const ativo =
+            filtroCard === card.filtro ||
+            (filtroCard === "padrao" && ["PENDENTE", "AGENDADO", "ENVIADO"].includes(card.filtro));
+
+          return (
+          <button
+            className={`summary-card summary-card-${card.color} scheduled-summary-filter${ativo ? " scheduled-summary-filter-active" : ""}`}
+            type="button"
+            key={card.label}
+            aria-pressed={ativo}
+            onClick={() => {
+              setFiltroCard(card.filtro);
+              setFiltros((atuais) => ({ ...atuais, status: "todos" }));
+            }}
+          >
             <div>
               <span>{card.label}</span>
               <strong>{carregando ? "..." : card.value}</strong>
               <small>{card.help}</small>
             </div>
-            <div className="dashboard-card-icon" aria-hidden="true"><MetricCardIcon type={card.icon} /></div>
-          </article>
-        ))}
+            <div className="summary-card-icon" aria-hidden="true"><MetricCardIcon type={card.icon} /></div>
+          </button>
+          );
+        })}
       </section>
 
       <section className="filters-panel scheduled-filters-panel" aria-label="Filtros">
@@ -808,7 +855,13 @@ export function MensagensProgramadas() {
 
         <label>
           <span>Status</span>
-          <select value={filtros.status} onChange={(event) => setFiltros({ ...filtros, status: event.target.value })}>
+          <select
+            value={filtros.status}
+            onChange={(event) => {
+              setFiltroCard("todos");
+              setFiltros({ ...filtros, status: event.target.value });
+            }}
+          >
             <option value="todos">Todos</option>
             <option value="PENDENTE">Pendente</option>
             <option value="AGENDADO">Agendado</option>
@@ -872,7 +925,6 @@ export function MensagensProgramadas() {
                   <th>Tipo</th>
                   <th>Repetição</th>
                   <th>Status</th>
-                  <th>Enviado</th>
                   <th>Enviado em</th>
                   <th>Ações</th>
                 </tr>
@@ -883,7 +935,15 @@ export function MensagensProgramadas() {
                   const mensagemAtual = buscarMensagemProgramadaPorId(mensagem.id_msg_programada) ?? mensagem;
 
                   return (
-                    <tr key={mensagem.id_msg_programada}>
+                    <tr
+                      className={`scheduled-message-row scheduled-message-row-${normalizarTexto(mensagem.status) || "pendente"}`}
+                      key={mensagem.id_msg_programada}
+                      tabIndex={0}
+                      onClick={() => setMensagemSelecionada(mensagemAtual)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") setMensagemSelecionada(mensagemAtual);
+                      }}
+                    >
                       <td>{formatarModulo(mensagem.origem_modulo)}</td>
                       <td>{mostrarValor(mensagem.titulo)}</td>
                       <td>{mostrarValor(mensagem.destinatario_nome)}</td>
@@ -897,17 +957,16 @@ export function MensagensProgramadas() {
                           {mensagem.status}
                         </span>
                       </td>
-                      <td>{mostrarValor(mensagem.enviado)}</td>
                       <td>{formatarDataHora(mensagem.data_hora_envio)}</td>
                       <td>
-                        <div className="actions-cell scheduled-actions-cell">
+                        <div className="actions-cell scheduled-actions-cell" onClick={(event) => event.stopPropagation()}>
                           <button
                             className="table-icon-button"
                             type="button"
                             title="Visualizar detalhes"
                             onClick={() => setMensagemSelecionada(mensagemAtual)}
                           >
-                            i
+                            <ScheduledProgramIcon tipo="info" />
                           </button>
                           <button
                             className="table-icon-button"
@@ -916,7 +975,7 @@ export function MensagensProgramadas() {
                             disabled={!podeEditar}
                             onClick={() => editarMensagemProgramada(mensagemAtual)}
                           >
-                            E
+                            <ScheduledProgramIcon tipo="edit" />
                           </button>
                           <button
                             className="table-icon-button"
@@ -930,7 +989,7 @@ export function MensagensProgramadas() {
                             }
                             onClick={() => void cancelarMensagemProgramada(mensagemAtual)}
                           >
-                            C
+                            <ScheduledProgramIcon tipo="close" />
                           </button>
                           <button
                             className="table-icon-button"
@@ -939,7 +998,7 @@ export function MensagensProgramadas() {
                             disabled={mensagem.status !== "CANCELADO" && mensagem.status !== "CANCELADA"}
                             onClick={() => void reativarMensagemProgramada(mensagemAtual)}
                           >
-                            R
+                            <ScheduledProgramIcon tipo="refresh" />
                           </button>
                           <button
                             className="table-icon-button"
@@ -953,7 +1012,7 @@ export function MensagensProgramadas() {
                             }
                             onClick={() => void marcarMensagemComoEnviada(mensagemAtual)}
                           >
-                            OK
+                            <ScheduledProgramIcon tipo="check" />
                           </button>
                           <button
                             className="table-icon-button"
@@ -967,7 +1026,7 @@ export function MensagensProgramadas() {
                             }
                             onClick={() => void marcarMensagemComErro(mensagemAtual)}
                           >
-                            !
+                            <ScheduledProgramIcon tipo="alert" />
                           </button>
                           <button
                             className="table-icon-button"
@@ -976,7 +1035,7 @@ export function MensagensProgramadas() {
                             disabled={mensagem.status === "ENVIADO" || mensagem.status === "ENVIADA"}
                             onClick={() => void excluirMensagemProgramada(mensagemAtual)}
                           >
-                            X
+                            <ScheduledProgramIcon tipo="trash" />
                           </button>
                         </div>
                       </td>
@@ -1318,6 +1377,166 @@ function formContaReceberInicial(conta: ContaReceber): FormMensagemProgramada {
   };
 }
 
+type ScheduledProgramIconType =
+  | "calendar"
+  | "file"
+  | "money"
+  | "phone"
+  | "clock"
+  | "user"
+  | "check"
+  | "info"
+  | "send"
+  | "close"
+  | "edit"
+  | "refresh"
+  | "alert"
+  | "trash";
+
+function ScheduledProgramIcon({ tipo }: { tipo: ScheduledProgramIconType }) {
+  if (tipo === "file") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7Z" />
+        <path d="M14 2v5h5" />
+        <path d="M9 13h6" />
+        <path d="M9 17h4" />
+      </svg>
+    );
+  }
+
+  if (tipo === "money") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3v18" />
+        <path d="M17 7.5c-.7-1.2-2-2-3.8-2H10c-2 0-3.5 1.2-3.5 2.9 0 1.8 1.4 2.6 3.2 3l4.5 1c1.8.4 3.3 1.2 3.3 3 0 1.8-1.5 3.1-3.6 3.1h-3.1c-2 0-3.4-.8-4.2-2.1" />
+      </svg>
+    );
+  }
+
+  if (tipo === "phone") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M22 16.9v2.8a2 2 0 0 1-2.2 2 19.7 19.7 0 0 1-8.6-3.1 19.4 19.4 0 0 1-6-6A19.7 19.7 0 0 1 2.1 4 2 2 0 0 1 4.1 2h2.8a2 2 0 0 1 2 1.7c.1.9.3 1.8.6 2.6a2 2 0 0 1-.5 2.1L7.8 9.6a16 16 0 0 0 6.6 6.6l1.2-1.2a2 2 0 0 1 2.1-.5c.8.3 1.7.5 2.6.6a2 2 0 0 1 1.7 1.8Z" />
+      </svg>
+    );
+  }
+
+  if (tipo === "clock") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3 2" />
+      </svg>
+    );
+  }
+
+  if (tipo === "user") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="8" r="4" />
+        <path d="M4 21a8 8 0 0 1 16 0" />
+      </svg>
+    );
+  }
+
+  if (tipo === "check") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M20 6 9 17l-5-5" />
+      </svg>
+    );
+  }
+
+  if (tipo === "info") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" />
+        <path d="M12 16v-4" />
+        <path d="M12 8h.01" />
+      </svg>
+    );
+  }
+
+  if (tipo === "send") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m22 2-7 20-4-9-9-4Z" />
+        <path d="M22 2 11 13" />
+      </svg>
+    );
+  }
+
+  if (tipo === "close") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M18 6 6 18" />
+        <path d="m6 6 12 12" />
+      </svg>
+    );
+  }
+
+  if (tipo === "edit") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" />
+      </svg>
+    );
+  }
+
+  if (tipo === "refresh") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M20 7v5h-5" />
+        <path d="M4 17v-5h5" />
+        <path d="M6.1 8a8 8 0 0 1 13.4 2M17.9 16A8 8 0 0 1 4.5 14" />
+      </svg>
+    );
+  }
+
+  if (tipo === "alert") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3 2 21h20Z" />
+        <path d="M12 9v5M12 18h.01" />
+      </svg>
+    );
+  }
+
+  if (tipo === "trash") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 3v3" />
+      <path d="M17 3v3" />
+      <rect x="4" y="5" width="16" height="16" rx="2" />
+      <path d="M4 10h16" />
+      <path d="M8 14h5" />
+    </svg>
+  );
+}
+
+function ScheduledAccountInfo({ icon, label, value }: { icon: ScheduledProgramIconType; label: string; value: string }) {
+  return (
+    <div className="scheduled-account-info">
+      <span className="scheduled-account-info-icon">
+        <ScheduledProgramIcon tipo={icon} />
+      </span>
+      <div>
+        <dt>{label}</dt>
+        <dd>{value || "-"}</dd>
+      </div>
+    </div>
+  );
+}
+
 export function ProgramarMensagemContaReceberModal({
   conta,
   onClose,
@@ -1402,9 +1621,9 @@ export function ProgramarMensagemContaReceberModal({
         : `Data inicial: ${formatarData(form.data_envio)} · Repetições adicionais: ${quantidadeAdicional}`;
 
   return (
-    <div className="review-modal-backdrop" role="presentation" onClick={salvando ? undefined : onClose}>
+    <div className="scheduled-program-backdrop" role="presentation" onClick={salvando ? undefined : onClose}>
       <section
-        className="review-modal scheduled-form-modal scheduled-program-modal"
+        className="scheduled-program-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="programar-mensagem-cobranca-titulo"
@@ -1413,13 +1632,7 @@ export function ProgramarMensagemContaReceberModal({
         <header className="scheduled-program-header">
           <div className="scheduled-program-title">
             <span className="scheduled-program-header-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M7 3v3" />
-                <path d="M17 3v3" />
-                <rect x="4" y="5" width="16" height="16" rx="2" />
-                <path d="M4 10h16" />
-                <path d="M8 14h5" />
-              </svg>
+              <ScheduledProgramIcon tipo="calendar" />
             </span>
             <div>
               <h2 id="programar-mensagem-cobranca-titulo">Programar Mensagem de Cobrança</h2>
@@ -1427,7 +1640,7 @@ export function ProgramarMensagemContaReceberModal({
             </div>
           </div>
           <button className="scheduled-close-button" type="button" onClick={onClose} disabled={salvando} aria-label="Fechar">
-            x
+            <ScheduledProgramIcon tipo="close" />
           </button>
         </header>
 
@@ -1436,23 +1649,11 @@ export function ProgramarMensagemContaReceberModal({
             <h3><span>1</span> Identificação do registro</h3>
             <div className="scheduled-account-card">
               <strong>#{conta.id_ctarec} - {conta.cliente_nome ?? "Cliente não informado"}</strong>
-              <dl>
-                <div>
-                  <dt>Documento</dt>
-                  <dd>{conta.documento ?? "-"}</dd>
-                </div>
-                <div>
-                  <dt>Valor</dt>
-                  <dd>{formatarMoeda(conta.vlr_ctarec)}</dd>
-                </div>
-                <div>
-                  <dt>Vencimento</dt>
-                  <dd>{formatarData(conta.dt_vencto)}</dd>
-                </div>
-                <div>
-                  <dt>Telefone</dt>
-                  <dd>{conta.cliente_telefone ?? "-"}</dd>
-                </div>
+              <dl className="scheduled-account-info-grid">
+                <ScheduledAccountInfo icon="file" label="Documento" value={conta.documento ?? "-"} />
+                <ScheduledAccountInfo icon="money" label="Valor" value={formatarMoeda(conta.vlr_ctarec)} />
+                <ScheduledAccountInfo icon="calendar" label="Vencimento" value={formatarData(conta.dt_vencto)} />
+                <ScheduledAccountInfo icon="phone" label="Telefone" value={conta.cliente_telefone ?? "-"} />
               </dl>
             </div>
           </section>
@@ -1507,22 +1708,28 @@ export function ProgramarMensagemContaReceberModal({
             <div className="scheduled-form scheduled-program-grid">
               <label>
                 <span>Data do envio</span>
-                <input
-                  type="date"
-                  value={form.data_envio}
-                  onChange={(event) => setForm({ ...form, data_envio: event.target.value })}
-                  disabled={salvando}
-                />
+                <div className="scheduled-input-icon-wrap">
+                  <input
+                    type="date"
+                    value={form.data_envio}
+                    onChange={(event) => setForm({ ...form, data_envio: event.target.value })}
+                    disabled={salvando}
+                  />
+                  <ScheduledProgramIcon tipo="calendar" />
+                </div>
               </label>
 
               <label>
                 <span>Horário</span>
-                <input
-                  type="time"
-                  value={form.hora_envio}
-                  onChange={(event) => setForm({ ...form, hora_envio: event.target.value })}
-                  disabled={salvando}
-                />
+                <div className="scheduled-input-icon-wrap">
+                  <input
+                    type="time"
+                    value={form.hora_envio}
+                    onChange={(event) => setForm({ ...form, hora_envio: event.target.value })}
+                    disabled={salvando}
+                  />
+                  <ScheduledProgramIcon tipo="clock" />
+                </div>
               </label>
 
               <label>
@@ -1556,8 +1763,8 @@ export function ProgramarMensagemContaReceberModal({
           </section>
 
           {isRecorrente && (
-            <section className="scheduled-section-card">
-              <h3><span>4</span> Configurações da replicação</h3>
+            <section className="scheduled-section-card scheduled-replication-section">
+              <h3><span>3</span> Configurações da replicação</h3>
               <div className="scheduled-form scheduled-replication-grid">
                 <label>
                   <span>Tipo de repetição</span>
@@ -1642,7 +1849,7 @@ export function ProgramarMensagemContaReceberModal({
           )}
 
           <section className="scheduled-section-card scheduled-summary-section">
-            <h3><span>{isRecorrente ? "5" : "4"}</span> Resumo da programação</h3>
+            <h3><span>4</span> Resumo da programação</h3>
             <button
               className={
                 totalProgramacoes > 1
@@ -1655,13 +1862,7 @@ export function ProgramarMensagemContaReceberModal({
               }}
             >
               <span className="scheduled-summary-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M7 3v3" />
-                  <path d="M17 3v3" />
-                  <rect x="4" y="5" width="16" height="16" rx="2" />
-                  <path d="M8 14h8" />
-                  <path d="M8 18h5" />
-                </svg>
+                <ScheduledProgramIcon tipo="check" />
               </span>
               <div>
                 <strong>{resumoPrincipal}</strong>
@@ -1673,7 +1874,7 @@ export function ProgramarMensagemContaReceberModal({
           </section>
 
           <section className="scheduled-section-card">
-            <h3><span>{isRecorrente ? "6" : "5"}</span> Status</h3>
+            <h3><span>5</span> Status</h3>
             <div className="scheduled-status-row">
               <label className="scheduled-status-select">
                 <span>Status da programação</span>
@@ -1697,7 +1898,7 @@ export function ProgramarMensagemContaReceberModal({
 
         {erro && <div className="feedback-box feedback-error">{erro}</div>}
 
-        <footer className="review-actions scheduled-program-footer">
+        <footer className="scheduled-program-footer">
           <button className="secondary-button" type="button" onClick={onClose} disabled={salvando}>
             Cancelar
           </button>
@@ -1707,6 +1908,7 @@ export function ProgramarMensagemContaReceberModal({
             onClick={() => void salvarMensagemProgramadaContaReceber()}
             disabled={salvando}
           >
+            <ScheduledProgramIcon tipo="send" />
             {salvando ? "Salvando..." : "Salvar programação"}
           </button>
         </footer>

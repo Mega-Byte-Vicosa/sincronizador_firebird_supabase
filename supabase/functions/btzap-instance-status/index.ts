@@ -2,10 +2,8 @@ import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { createSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { extrairDadosInstancia, montarEndpoint, validateInstanceConfig } from "../_shared/btzapInstance.ts";
 
-const EMPRESA_PADRAO_ID = "00000000-0000-0000-0000-000000000001";
-
 function obterIdEmpresa(payload: Record<string, unknown>) {
-  return String(payload.id_empresa || payload.idEmpresa || EMPRESA_PADRAO_ID).trim();
+  return String(payload.id_empresa || payload.idEmpresa || "").trim();
 }
 
 Deno.serve(async (req) => {
@@ -17,6 +15,10 @@ Deno.serve(async (req) => {
   try {
     const payload = req.method === "POST" ? await req.json().catch(() => ({})) : {};
     const idEmpresa = obterIdEmpresa(payload);
+    if (!idEmpresa) {
+      return jsonResponse({ success: false, message: "Empresa da sessão não identificada." }, 400);
+    }
+
     const supabase = createSupabaseAdmin();
 
     const { data: config, error: configError } = await supabase
@@ -29,6 +31,9 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (configError) throw configError;
+    if (!config) {
+      return jsonResponse({ success: false, message: "WhatsApp não configurado para esta empresa." });
+    }
 
     const validationError = validateInstanceConfig(config);
     if (validationError) return jsonResponse({ success: false, message: validationError });

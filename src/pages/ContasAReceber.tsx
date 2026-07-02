@@ -38,6 +38,8 @@ interface RevisaoWhatsapp {
   enviando: boolean;
 }
 
+type WhatsappReviewIconType = "message" | "user" | "phone" | "file" | "money" | "calendar" | "send" | "close";
+
 interface MensagemProgramadaConta {
   id_origem: string | null;
   status: string;
@@ -200,6 +202,94 @@ function ResumoCard({ titulo, valor, subtitulo, icone, cor }: ResumoCardProps) {
         <ResumoCardIcon tipo={icone} />
       </div>
     </article>
+  );
+}
+
+function WhatsappReviewIcon({ tipo }: { tipo: WhatsappReviewIconType }) {
+  if (tipo === "user") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="8" r="4" />
+        <path d="M4 21a8 8 0 0 1 16 0" />
+      </svg>
+    );
+  }
+
+  if (tipo === "phone") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M22 16.9v2.8a2 2 0 0 1-2.2 2 19.7 19.7 0 0 1-8.6-3.1 19.4 19.4 0 0 1-6-6A19.7 19.7 0 0 1 2.1 4 2 2 0 0 1 4.1 2h2.8a2 2 0 0 1 2 1.7c.1.9.3 1.8.6 2.6a2 2 0 0 1-.5 2.1L7.8 9.6a16 16 0 0 0 6.6 6.6l1.2-1.2a2 2 0 0 1 2.1-.5c.8.3 1.7.5 2.6.6a2 2 0 0 1 1.7 1.8Z" />
+      </svg>
+    );
+  }
+
+  if (tipo === "file") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7Z" />
+        <path d="M14 2v5h5" />
+        <path d="M9 13h6" />
+        <path d="M9 17h4" />
+      </svg>
+    );
+  }
+
+  if (tipo === "money") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3v18" />
+        <path d="M17 7.5c-.7-1.2-2-2-3.8-2H10c-2 0-3.5 1.2-3.5 2.9 0 1.8 1.4 2.6 3.2 3l4.5 1c1.8.4 3.3 1.2 3.3 3 0 1.8-1.5 3.1-3.6 3.1h-3.1c-2 0-3.4-.8-4.2-2.1" />
+      </svg>
+    );
+  }
+
+  if (tipo === "calendar") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 3v3" />
+        <path d="M17 3v3" />
+        <rect x="4" y="5" width="16" height="16" rx="2" />
+        <path d="M4 10h16" />
+      </svg>
+    );
+  }
+
+  if (tipo === "send") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m22 2-7 20-4-9-9-4Z" />
+        <path d="M22 2 11 13" />
+      </svg>
+    );
+  }
+
+  if (tipo === "close") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M18 6 6 18" />
+        <path d="m6 6 12 12" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9H13a8.5 8.5 0 0 1 8 8Z" />
+    </svg>
+  );
+}
+
+function WhatsappReviewInfoCard({ icon, label, value }: { icon: WhatsappReviewIconType; label: string; value: string }) {
+  return (
+    <div className="whatsapp-review-info-card">
+      <div>
+        <span className="whatsapp-review-info-icon">
+          <WhatsappReviewIcon tipo={icon} />
+        </span>
+        <span>{label}</span>
+      </div>
+      <strong>{value || "-"}</strong>
+    </div>
   );
 }
 
@@ -1097,11 +1187,11 @@ export function ContasAReceber() {
                 tabIndex={0}
               >
                 <div className="receivable-account-cell">
+                  <span className="receivable-document">Documento {formatarValorCampo(conta, "documento")}</span>
                   <div className="receivable-account-title">
                     <strong>{valorVazio(conta.cliente_nome) ? "Cliente nao encontrado" : conta.cliente_nome}</strong>
                     <span className={getStatusClass(conta)}>{getStatusLabel(conta)}</span>
                   </div>
-                  <span className="receivable-document">Documento {formatarValorCampo(conta, "documento")}</span>
                   <span>{formatarValorCampo(conta, "cliente_telefone")}</span>
                   <small>{formatarValorCampo(conta, "historico")}</small>
                 </div>
@@ -1256,104 +1346,114 @@ export function ContasAReceber() {
       )}
 
       {revisaoWhatsapp && (
-        <div className="review-modal-backdrop" role="presentation" onClick={fecharRevisaoWhatsapp}>
+        <div className="whatsapp-review-backdrop" role="presentation" onClick={fecharRevisaoWhatsapp}>
           <section
-            className="review-modal"
+            className="whatsapp-review-modal"
             role="dialog"
             aria-modal="true"
             aria-labelledby="revisao-whatsapp-titulo"
             onClick={(event) => event.stopPropagation()}
           >
-            <header className="review-modal-header">
-              <div>
-                <h2 id="revisao-whatsapp-titulo">Revisar mensagem WhatsApp</h2>
-                <p>{revisaoWhatsapp.tipoEnvio === "reenvio" ? "Reenvio" : "Envio"} para cliente</p>
-              </div>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={fecharRevisaoWhatsapp}
-                disabled={revisaoWhatsapp.enviando}
-              >
-                Fechar
-              </button>
-            </header>
+            <div className="whatsapp-review-shell">
+              <header className="whatsapp-review-header">
+                <div className="whatsapp-review-title">
+                  <span className="whatsapp-review-title-icon">
+                    <WhatsappReviewIcon tipo="message" />
+                  </span>
+                  <div>
+                    <h2 id="revisao-whatsapp-titulo">Revisar mensagem WhatsApp</h2>
+                    <p>Confirme os dados antes do envio para o cliente</p>
+                  </div>
+                </div>
+                <button
+                  className="whatsapp-review-close"
+                  type="button"
+                  onClick={fecharRevisaoWhatsapp}
+                  disabled={revisaoWhatsapp.enviando}
+                  aria-label="Fechar"
+                >
+                  <WhatsappReviewIcon tipo="close" />
+                </button>
+              </header>
 
-            <dl className="review-summary">
-              <div>
-                <dt>Cliente</dt>
-                <dd>{revisaoWhatsapp.conta.cliente_nome ?? "-"}</dd>
-              </div>
-              <div>
-                <dt>Telefone</dt>
-                <dd>
-                  <input
-                    className="review-phone-input"
-                    value={revisaoWhatsapp.telefone}
+              <div className="whatsapp-review-content">
+                <div className="whatsapp-review-grid">
+                  <WhatsappReviewInfoCard icon="user" label="Cliente" value={revisaoWhatsapp.conta.cliente_nome ?? "-"} />
+
+                  <div className="whatsapp-review-info-card whatsapp-review-phone-card">
+                    <div>
+                      <span className="whatsapp-review-info-icon">
+                        <WhatsappReviewIcon tipo="phone" />
+                      </span>
+                      <span>Telefone</span>
+                    </div>
+                    <input
+                      value={revisaoWhatsapp.telefone}
+                      onChange={(event) =>
+                        setRevisaoWhatsapp({
+                          ...revisaoWhatsapp,
+                          telefone: event.target.value,
+                          erro: null,
+                        })
+                      }
+                      disabled={revisaoWhatsapp.enviando}
+                      placeholder="Informe o telefone"
+                    />
+                  </div>
+
+                  <WhatsappReviewInfoCard icon="file" label="Documento" value={revisaoWhatsapp.conta.documento ?? "-"} />
+                  <WhatsappReviewInfoCard icon="money" label="Valor" value={formatarMoeda(revisaoWhatsapp.conta.vlr_ctarec)} />
+                  <WhatsappReviewInfoCard icon="calendar" label="Vencimento" value={formatarData(revisaoWhatsapp.conta.dt_vencto)} />
+                </div>
+
+                <label className="whatsapp-review-message-card">
+                  <span>
+                    <span className="whatsapp-review-info-icon">
+                      <WhatsappReviewIcon tipo="message" />
+                    </span>
+                    Mensagem editável
+                  </span>
+                  <textarea
+                    value={revisaoWhatsapp.mensagem}
                     onChange={(event) =>
                       setRevisaoWhatsapp({
                         ...revisaoWhatsapp,
-                        telefone: event.target.value,
+                        mensagem: event.target.value,
                         erro: null,
                       })
                     }
                     disabled={revisaoWhatsapp.enviando}
-                    placeholder="Informe o telefone"
                   />
-                </dd>
-              </div>
-              <div>
-                <dt>Documento</dt>
-                <dd>{revisaoWhatsapp.conta.documento ?? "-"}</dd>
-              </div>
-              <div>
-                <dt>Valor</dt>
-                <dd>{formatarMoeda(revisaoWhatsapp.conta.vlr_ctarec)}</dd>
-              </div>
-              <div>
-                <dt>Vencimento</dt>
-                <dd>{formatarData(revisaoWhatsapp.conta.dt_vencto)}</dd>
-              </div>
-            </dl>
+                </label>
 
-            <label className="message-editor">
-              <span>Mensagem editável</span>
-              <textarea
-                value={revisaoWhatsapp.mensagem}
-                onChange={(event) =>
-                  setRevisaoWhatsapp({
-                    ...revisaoWhatsapp,
-                    mensagem: event.target.value,
-                    erro: null,
-                  })
-                }
-                disabled={revisaoWhatsapp.enviando}
-              />
-            </label>
+                {revisaoWhatsapp.erro && <div className="feedback-box feedback-error">{revisaoWhatsapp.erro}</div>}
+              </div>
 
-            {revisaoWhatsapp.erro && <div className="feedback-box feedback-error">{revisaoWhatsapp.erro}</div>}
-
-            <footer className="review-actions">
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={fecharRevisaoWhatsapp}
-                disabled={revisaoWhatsapp.enviando}
-              >
-                Cancelar
-              </button>
-              <button
-                className="primary-button"
-                type="button"
-                onClick={confirmarEnvioWhatsapp}
-                disabled={revisaoWhatsapp.enviando}
-              >
-                {revisaoWhatsapp.enviando ? "Enviando mensagem..." : "Confirmar envio"}
-              </button>
-            </footer>
+              <footer className="whatsapp-review-footer">
+                <button
+                  className="whatsapp-review-secondary"
+                  type="button"
+                  onClick={fecharRevisaoWhatsapp}
+                  disabled={revisaoWhatsapp.enviando}
+                >
+                  <WhatsappReviewIcon tipo="close" />
+                  Cancelar
+                </button>
+                <button
+                  className="whatsapp-review-primary"
+                  type="button"
+                  onClick={confirmarEnvioWhatsapp}
+                  disabled={revisaoWhatsapp.enviando}
+                >
+                  <WhatsappReviewIcon tipo="send" />
+                  {revisaoWhatsapp.enviando ? "Enviando..." : "Confirmar envio"}
+                </button>
+              </footer>
+            </div>
           </section>
         </div>
       )}
+
     </main>
   );
 }

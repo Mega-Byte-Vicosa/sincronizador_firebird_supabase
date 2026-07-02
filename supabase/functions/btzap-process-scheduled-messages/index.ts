@@ -4,6 +4,7 @@ import type { BtzapConfig } from "../_shared/btzapClient.ts";
 import { extrairDadosInstancia, montarEndpoint } from "../_shared/btzapInstance.ts";
 import { extrairMensagemIdExterno } from "../_shared/btzapMessageStatus.ts";
 import { createSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
+import { processarCampanhasAutomatizadas } from "../_shared/campaignAutomations.ts";
 
 const LIMITE_POR_EXECUCAO = 10;
 const INTERVALO_ENTRE_ENVIOS_MS = 5_000;
@@ -22,6 +23,17 @@ interface MensagemProgramada {
   enviado: boolean;
   ativo: boolean;
   tentativas_envio: number;
+}
+
+function normalizarTextoErro(valor: unknown): string {
+  if (typeof valor === "string") return valor.trim();
+  if (valor instanceof Error) return valor.message;
+  if (valor === null || valor === undefined) return "";
+  try {
+    return JSON.stringify(valor);
+  } catch {
+    return String(valor);
+  }
 }
 
 function dataHoraProgramada(mensagem: MensagemProgramada) {
@@ -140,6 +152,7 @@ async function registrarHistoricoMensagemProgramada(
   mensagem: MensagemProgramada,
   status: "enviado" | "erro",
   erro: string | null,
+  requestPayload: unknown,
   responsePayload: unknown,
 ) {
   let documento: string | null = null;
@@ -157,28 +170,45 @@ async function registrarHistoricoMensagemProgramada(
 
   const agora = new Date().toISOString();
   const sucesso = status === "enviado";
-  const { error } = await supabase.from("tab_whatsapp_envios").insert({
+  const historicoPayload = {
     id_empresa: mensagem.id_empresa,
     id_ctarec: mensagem.origem_modulo === "CONTA_RECEBER" && mensagem.id_origem ? Number(mensagem.id_origem) : null,
-    cliente_nome: mensagem.destinatario_nome,
-    cliente_telefone: mensagem.destinatario_telefone,
-    origem: "Mensagem Programada",
+    cliente_nome: mensagem.destinatario_nome || null,
+    cliente_telefone: mensagem.destinatario_telefone || null,
+    origem: mensagem.origem_modulo === "CAMPANHA" ? "Campanha de Promocao" : "Mensagem Programada",
     documento,
-    mensagem: mensagem.mensagem,
+    mensagem: mensagem.mensagem || null,
     status,
     tipo_envio: "envio",
-    erro,
+    provider: "btzap",
+    erro: sucesso ? null : erro,
     enviado_em: sucesso ? agora : null,
     mensagem_id_externo: extrairMensagemIdExterno(responsePayload),
     status_entrega: sucesso ? "ENVIADO_API" : "FALHOU",
     enviado_api_em: sucesso ? agora : null,
     falhou_em: sucesso ? null : agora,
-    response_payload: responsePayload,
+    request_payload: requestPayload ?? null,
+    response_payload: responsePayload ?? null,
+    webhook_ultimo_evento: responsePayload ?? null,
     origem_envio: "MENSAGEM_PROGRAMADA",
     origem_modulo: mensagem.origem_modulo,
     id_msg_programada: mensagem.id_msg_programada,
-    id_origem: mensagem.id_origem,
-  });
+    id_origem: mensagem.id_origem ? String(mensagem.id_origem) : null,
+  };
+
+  const { data: historicoExistente, error: buscaError } = await supabase
+    .from("tab_whatsapp_envios")
+    .select("id")
+    .eq("id_empresa", mensagem.id_empresa)
+    .eq("origem_modulo", mensagem.origem_modulo)
+    .eq("id_msg_programada", mensagem.id_msg_programada)
+    .maybeSingle();
+
+  if (buscaError) throw buscaError;
+
+  const { error } = historicoExistente?.id
+    ? await supabase.from("tab_whatsapp_envios").update(historicoPayload).eq("id", historicoExistente.id)
+    : await supabase.from("tab_whatsapp_envios").insert(historicoPayload);
 
   if (error) throw error;
 }
@@ -215,6 +245,125 @@ async function atualizarMensagemComErro(
     .eq("id_msg_programada", mensagem.id_msg_programada);
 
   if (error) throw error;
+}
+
+async function atualizarErroMensagemProgramada(
+  supabase: ReturnType<typeof createSupabaseAdmin>,
+  mensagem: MensagemProgramada,
+  erro: string,
+) {
+  const { error } = await supabase
+    .from("tb_msg_programadas")
+    .update({ erro_envio: erro, processando_em: null })
+    .eq("id_empresa", mensagem.id_empresa)
+    .eq("id_msg_programada", mensagem.id_msg_programada);
+
+  if (error) throw error;
+}
+
+async function atualizarClienteCampanha(
+  supabase: ReturnType<typeof createSupabaseAdmin>,
+  mensagem: MensagemProgramada,
+  statusEnvio: "enviado" | "falhou",
+  erro: string | null,
+) {
+  if (mensagem.origem_modulo !== "CAMPANHA" || !mensagem.id_origem) return;
+
+  const telefoneMensagem = String(mensagem.destinatario_telefone ?? "").replace(/\D/g, "");
+  const { data, error } = await supabase
+    .from("tab_campanha_clientes")
+    .select("id, telefone")
+    .eq("id_empresa", mensagem.id_empresa)
+    .eq("id_campanha", mensagem.id_origem);
+
+  if (error) throw error;
+
+  const cliente = (data ?? []).find((item: { telefone?: string | null }) =>
+    String(item.telefone ?? "").replace(/\D/g, "") === telefoneMensagem,
+  ) as { id: string } | undefined;
+
+  if (!cliente?.id) return;
+
+  const updatePayload: Record<string, unknown> = {
+    status_envio: statusEnvio,
+    erro_envio: erro,
+  };
+
+  if (statusEnvio === "enviado") {
+    updatePayload.enviado_em = new Date().toISOString();
+  }
+
+  const { error: updateError } = await supabase
+    .from("tab_campanha_clientes")
+    .update(updatePayload)
+    .eq("id", cliente.id)
+    .eq("id_empresa", mensagem.id_empresa);
+
+  if (updateError) throw updateError;
+}
+
+async function recalcularCampanha(
+  supabase: ReturnType<typeof createSupabaseAdmin>,
+  mensagem: MensagemProgramada,
+) {
+  if (mensagem.origem_modulo !== "CAMPANHA" || !mensagem.id_origem) return;
+
+  const { data: destinatarios, error } = await supabase
+    .from("tab_campanha_clientes")
+    .select("status_envio")
+    .eq("id_empresa", mensagem.id_empresa)
+    .eq("id_campanha", mensagem.id_origem);
+
+  if (error) throw error;
+
+  const validos = (destinatarios ?? []).filter((item: { status_envio?: string | null }) =>
+    !["ignorado", "cancelado"].includes(String(item.status_envio ?? "").toLowerCase()),
+  );
+  const totalDestinatarios = validos.length;
+  const totalEnviados = validos.filter((item: { status_envio?: string | null }) => item.status_envio === "enviado").length;
+  const totalFalhas = validos.filter((item: { status_envio?: string | null }) => item.status_envio === "falhou").length;
+  const processados = totalEnviados + totalFalhas;
+  const percentualEnvio = totalDestinatarios > 0 ? Math.round((processados / totalDestinatarios) * 10000) / 100 : 0;
+  const agora = new Date().toISOString();
+  const statusCampanha =
+    processados === 0
+      ? "programada"
+      : processados < totalDestinatarios
+        ? "enviando"
+        : "concluida";
+
+  const { data: campanhaAtual, error: campanhaError } = await supabase
+    .from("tab_campanha")
+    .select("data_hora_inicio_envio")
+    .eq("id_empresa", mensagem.id_empresa)
+    .eq("id", mensagem.id_origem)
+    .maybeSingle();
+
+  if (campanhaError) throw campanhaError;
+
+  const updatePayload: Record<string, unknown> = {
+    total_destinatarios: totalDestinatarios,
+    total_enviados: totalEnviados,
+    total_falhas: totalFalhas,
+    percentual_envio: percentualEnvio,
+    status: statusCampanha,
+  };
+
+  if (processados > 0 && !campanhaAtual?.data_hora_inicio_envio) {
+    updatePayload.data_hora_inicio_envio = agora;
+  }
+
+  if (totalDestinatarios > 0 && processados >= totalDestinatarios) {
+    updatePayload.data_hora_fim_envio = agora;
+  }
+
+  const { error: updateError } = await supabase
+    .from("tab_campanha")
+    .update(updatePayload)
+    .eq("id_empresa", mensagem.id_empresa)
+    .eq("id", mensagem.id_origem);
+
+  if (updateError) throw updateError;
 }
 
 async function recuperarProcessamentosInterrompidos(supabase: ReturnType<typeof createSupabaseAdmin>, idEmpresa?: string | null) {
@@ -289,11 +438,14 @@ function validarMensagemParaEnvio(mensagem: MensagemProgramada) {
   return null;
 }
 
-function obterErroRetornoApi(retorno: string | undefined) {
-  if (!retorno?.trim()) return null;
+function obterErroRetornoApi(retorno: unknown) {
+  const retornoTexto = normalizarTextoErro(retorno);
+  if (!retornoTexto) return null;
 
   try {
-    const resposta = JSON.parse(retorno) as Record<string, unknown>;
+    const resposta = typeof retorno === "object" && retorno !== null
+      ? retorno as Record<string, unknown>
+      : JSON.parse(retornoTexto) as Record<string, unknown>;
     if (resposta.success === false || resposta.error || resposta.erro) {
       const detalhe = resposta.message ?? resposta.error ?? resposta.erro;
       if (typeof detalhe === "string") return detalhe;
@@ -308,11 +460,32 @@ function obterErroRetornoApi(retorno: string | undefined) {
 }
 
 async function obterConfiguracao(supabase: ReturnType<typeof createSupabaseAdmin>, idEmpresa?: string | null) {
-  let query = supabase.from("tab_btzap_config").select("*").eq("ativo", true).limit(1);
-  if (idEmpresa) query = query.eq("id_empresa", idEmpresa);
-  const { data, error } = await query.maybeSingle();
-  if (error) return { config: null, erro: `Configuração de WhatsApp não encontrada: ${error.message}` };
-  if (!data) return { config: null, erro: "Configuração de WhatsApp não encontrada." };
+  if (!idEmpresa) {
+    return { config: null, erro: "Empresa da mensagem não identificada." };
+  }
+
+  const { data, error } = await supabase
+    .from("tab_btzap_config")
+    .select("*")
+    .eq("id_empresa", idEmpresa)
+    .eq("ativo", true)
+    .order("atualizado_em", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    return {
+      config: null,
+      erro: `Configuração de WhatsApp não encontrada para esta empresa. Acesse Configurações > WhatsApp/BTZap e cadastre/ative a instância. Detalhe: ${error.message}`,
+    };
+  }
+
+  if (!data) {
+    return {
+      config: null,
+      erro: "Configuração de WhatsApp não encontrada para esta empresa. Acesse Configurações > WhatsApp/BTZap e cadastre/ative a instância.",
+    };
+  }
 
   const erro = validateBtzapConfig(data as BtzapConfig);
   return { config: data as BtzapConfig, erro };
@@ -325,12 +498,7 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
 
   const mensagens = await buscarMensagensAgendadasParaEnvio(supabase, idEmpresa);
   console.log(`[Mensagens Programadas] Total encontradas para envio: ${mensagens.length}.`);
-  if (mensagens.length === 0) return { processadas: 0, resultados: [] };
 
-  const { config, erro: erroConfiguracao } = await obterConfiguracao(supabase, idEmpresa);
-  const erroInstancia = config && !erroConfiguracao
-    ? await validarInstanciaBtzap(config as BtzapConfig & { endpoint_status_instancia?: string | null })
-    : null;
   const resultados = [];
 
   for (const mensagemEncontrada of mensagens) {
@@ -339,6 +507,7 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
     const mensagem = await reservarMensagemParaProcessamento(supabase, mensagemEncontrada);
     if (!mensagem) continue;
     const conteudoParaEnvio = formatarCobrancaProgramadaParaEnvio(mensagem);
+    let requestPayload: { phone: string | null; message: string } | null = null;
     let responsePayload: unknown = null;
 
     try {
@@ -348,7 +517,11 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
 
       const erroValidacao = validarMensagemParaEnvio(mensagem);
       if (erroValidacao) throw new Error(erroValidacao);
-      if (erroConfiguracao || !config) throw new Error(erroConfiguracao ?? "Configuração de WhatsApp não encontrada.");
+
+      const { config, erro: erroConfiguracao } = await obterConfiguracao(supabase, mensagem.id_empresa);
+      if (erroConfiguracao || !config) throw new Error(erroConfiguracao ?? "Configuração de WhatsApp não encontrada para esta empresa.");
+
+      const erroInstancia = await validarInstanciaBtzap(config as BtzapConfig & { endpoint_status_instancia?: string | null });
       if (erroInstancia) throw new Error(erroInstancia);
 
       const erroConsentimento = await validarConsentimentoCliente(supabase, mensagem);
@@ -358,10 +531,11 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
       if (!telefone) throw new Error("Telefone do destinatário inválido ou não informado.");
 
       console.log("[Mensagens Programadas] Telefone validado. Enviando mensagem via BTZap.");
-      const result = await sendBtzapMessage(config, {
+      requestPayload = {
         phone: telefone,
         message: conteudoParaEnvio,
-      });
+      };
+      const result = await sendBtzapMessage(config, requestPayload);
       responsePayload = "retorno" in result ? result.retorno ?? null : null;
 
       if (!result.success) throw new Error(result.message);
@@ -369,19 +543,26 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
       if (erroRetornoApi) throw new Error(erroRetornoApi);
 
       await atualizarMensagemComoEnviada(supabase, mensagem);
+      await atualizarClienteCampanha(supabase, mensagem, "enviado", null);
+      await recalcularCampanha(supabase, mensagem);
 
       let erroHistorico: string | null = null;
       try {
-        await registrarHistoricoMensagemProgramada(supabase, mensagem, "enviado", null, responsePayload);
+        await registrarHistoricoMensagemProgramada(supabase, mensagem, "enviado", null, requestPayload, responsePayload);
       } catch (error) {
-        erroHistorico = error instanceof Error ? error.message : String(error);
+        erroHistorico = normalizarTextoErro(error);
+        await atualizarErroMensagemProgramada(
+          supabase,
+          mensagem,
+          `Envio concluído. | Falha ao registrar histórico: ${erroHistorico}`,
+        );
         console.error(`[Mensagens Programadas] Envio concluído, mas o histórico falhou: ${erroHistorico}`);
       }
 
       console.log("[Mensagens Programadas] Envio concluído com sucesso.");
       resultados.push({ id_msg_programada: mensagem.id_msg_programada, success: true, erro_historico: erroHistorico });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = normalizarTextoErro(error);
       console.error(`[Mensagens Programadas] Erro no envio: ${errorMessage}`);
 
       try {
@@ -395,9 +576,25 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
       }
 
       try {
-        await registrarHistoricoMensagemProgramada(supabase, mensagem, "erro", errorMessage, responsePayload);
+        if (!requestPayload) {
+          requestPayload = {
+            phone: normalizarTelefoneBrasil(mensagem.destinatario_telefone),
+            message: conteudoParaEnvio,
+          };
+        }
+        await registrarHistoricoMensagemProgramada(supabase, mensagem, "erro", errorMessage, requestPayload, responsePayload);
       } catch (historyError) {
-        console.error(`[Mensagens Programadas] Falha ao registrar histórico de erro: ${String(historyError)}`);
+        const erroHistorico = normalizarTextoErro(historyError);
+        const erroComHistorico = `${errorMessage} | Falha ao registrar histórico: ${erroHistorico}`;
+        await atualizarErroMensagemProgramada(supabase, mensagem, erroComHistorico);
+        console.error(`[Mensagens Programadas] Falha ao registrar histórico de erro: ${erroHistorico}`);
+      }
+
+      try {
+        await atualizarClienteCampanha(supabase, mensagem, "falhou", errorMessage);
+        await recalcularCampanha(supabase, mensagem);
+      } catch (campaignError) {
+        console.error(`[Mensagens Programadas] Falha ao atualizar progresso da campanha: ${normalizarTextoErro(campaignError)}`);
       }
 
       resultados.push({ id_msg_programada: mensagem.id_msg_programada, success: false, error: errorMessage });
@@ -414,8 +611,14 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json().catch(() => ({})) as { id_empresa?: string };
     const idEmpresa = body.id_empresa?.trim() || null;
-    const resultado = await executarMensagensProgramadas(idEmpresa);
-    return jsonResponse({ success: true, ...resultado });
+    const mensagensProgramadas = await executarMensagensProgramadas(idEmpresa);
+    const automacoes = await processarCampanhasAutomatizadas(createSupabaseAdmin(), idEmpresa);
+    return jsonResponse({
+      success: true,
+      processadas: mensagensProgramadas.processadas + automacoes.envios,
+      mensagens_programadas: mensagensProgramadas,
+      automacoes,
+    });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     return jsonResponse({ success: false, message: "Não foi possível processar mensagens programadas.", error: errorMessage }, 500);
