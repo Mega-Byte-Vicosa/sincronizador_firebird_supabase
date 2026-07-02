@@ -69,7 +69,7 @@ export function Sidebar({ activePath, collapsed, mobileOpen, onCollapse, onNavig
   return (
     <aside className={`sidebar${collapsed ? " sidebar-collapsed" : ""}${mobileOpen ? " sidebar-mobile-open" : ""}`}>
       <div className="sidebar-brand">
-        <div className="sidebar-brand-mark">CP</div>
+        <div className="sidebar-brand-mark">MBC</div>
         <div className="sidebar-brand-copy">
           <strong>MegaByte Connect</strong>
           <span>Automação inteligente para sua empresa</span>

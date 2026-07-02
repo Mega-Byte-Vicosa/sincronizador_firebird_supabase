@@ -63,7 +63,7 @@ export function App() {
   if (carregando) {
     return (
       <div className="auth-loading-screen" role="status">
-        <span className="auth-loading-mark">CP</span>
+        <span className="auth-loading-mark">MBC</span>
         <p>Validando acesso...</p>
       </div>
     );

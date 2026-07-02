@@ -91,7 +91,7 @@ export function Topbar({ onOpenMenu }: TopbarProps) {
             <span>{usuario?.cnpj}</span>
           </div>
           <div className="topbar-avatar" aria-label={`Usuário do sistema: ${nome}`}>
-            {iniciais || "CP"}
+            {iniciais || "MBC"}
           </div>
           <div className="topbar-user-actions">
             <button className="topbar-password-button" type="button" onClick={() => setModalSenhaAberto(true)}>

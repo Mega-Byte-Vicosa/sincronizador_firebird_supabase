@@ -2126,33 +2126,78 @@ button:disabled {
 
 .primary-button,
 .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-height: 42px;
   border: 1px solid #bfccd9;
-  border-radius: 6px;
-  padding: 0 16px;
+  border-radius: 8px;
+  padding: 0 18px;
   color: #172033;
   background: #ffffff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 6%);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
   transition:
+    transform 0.16s ease,
     background 0.2s ease,
     border-color 0.2s ease,
-    box-shadow 0.2s ease;
+    box-shadow 0.2s ease,
+    color 0.2s ease;
+}
+
+.primary-button svg,
+.secondary-button svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
 }
 
 .primary-button {
   border-color: #2563eb;
   color: #ffffff;
   background: #2563eb;
+  box-shadow: 0 4px 10px rgb(37 99 235 / 20%);
 }
 
-.primary-button:hover,
-.primary-button:focus-visible {
+.primary-button:hover:not(:disabled) {
+  border-color: #1d4ed8;
   background: #1d4ed8;
+  box-shadow: 0 6px 14px rgb(37 99 235 / 25%);
+  transform: translateY(-1px);
 }
 
-.secondary-button:hover,
-.secondary-button:focus-visible {
-  border-color: #718096;
+.secondary-button:hover:not(:disabled) {
+  border-color: #94a3b8;
+  color: #0f172a;
   background: #f8fafc;
+  box-shadow: 0 3px 8px rgb(15 23 42 / 9%);
+  transform: translateY(-1px);
+}
+
+.primary-button:active:not(:disabled),
+.secondary-button:active:not(:disabled) {
+  box-shadow: 0 1px 2px rgb(15 23 42 / 8%);
+  transform: translateY(0);
+}
+
+.primary-button:focus-visible,
+.secondary-button:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 22%);
+  outline-offset: 2px;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 .summary-grid {
