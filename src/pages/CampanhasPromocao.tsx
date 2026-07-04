@@ -31,6 +31,10 @@ interface Campanha {
   automatizada: boolean;
   publico_dinamico: boolean;
   tipo_automacao: string | null;
+  automacao_dias_carencia: number | null;
+  automacao_dias_antes_vencimento: number | null;
+  automacao_dias_sem_compra: number | null;
+  automacao_dias_pos_compra: number | null;
   campanha_continua: boolean;
   termina_em: string | null;
   automacao_status: AutomacaoStatus;
@@ -73,6 +77,19 @@ interface ClienteCampanha {
   tags: string[] | null;
 }
 
+interface ContaCampanha {
+  id_ctarec: number;
+  id_empresa: string | null;
+  id_cliente: number | null;
+  documento: string | null;
+  cliente_nome: string | null;
+  cliente_telefone: string | null;
+  dt_vencto: string | null;
+  dt_baixa: string | null;
+  vlr_ctarec: number | null;
+  vlr_receb: number | null;
+}
+
 interface DestinatarioCampanha {
   id_cliente: number;
   nome_cliente: string | null;
@@ -105,6 +122,10 @@ interface FormCampanha {
   empresaDestino: string;
   automatizada: boolean;
   tipoAutomacao: string;
+  automacaoDiasCarencia: string;
+  automacaoDiasAntesVencimento: string;
+  automacaoDiasSemCompra: string;
+  automacaoDiasPosCompra: string;
   campanhaContinua: boolean;
   terminaEm: string;
   automacaoStatus: AutomacaoStatus;
@@ -138,6 +159,10 @@ const formInicial: FormCampanha = {
   empresaDestino: "",
   automatizada: false,
   tipoAutomacao: "",
+  automacaoDiasCarencia: "",
+  automacaoDiasAntesVencimento: "",
+  automacaoDiasSemCompra: "",
+  automacaoDiasPosCompra: "",
   campanhaContinua: false,
   terminaEm: "",
   automacaoStatus: "inativa",
@@ -178,22 +203,47 @@ const statusExibicaoPadrao: StatusCampanha[] = ["rascunho", "programada", "concl
 const tiposAutomacao = [
   { value: "aniversariantes_mes", label: "Aniversariantes do mês" },
   { value: "aniversariantes_dia", label: "Aniversariantes do dia" },
-  { value: "clientes_inativos_90_dias", label: "Clientes sem compra há mais de 90 dias" },
-  { value: "pos_compra_2_dias", label: "Pós-compra de 2 dias" },
+  { value: "clientes_sem_comprar_dias", label: "Cliente sem comprar por dias" },
+  { value: "pos_compra_dias", label: "Pós-compra por dias" },
+  { value: "contas_a_vencer_dias", label: "A vencer em dias" },
+  { value: "contas_vencendo_hoje", label: "Vencendo hoje" },
+  { value: "contas_vencidas_com_carencia", label: "Vencida com Carência" },
 ] as const;
+
+const tiposAutomacaoCobranca = new Set([
+  "contas_a_vencer_dias",
+  "contas_vencendo_hoje",
+  "contas_vencidas_com_carencia",
+]);
 
 function normalizarTipoAutomacao(value: string | null | undefined) {
   const aliases: Record<string, string> = {
     aniversario_mes: "aniversariantes_mes",
     aniversario_dia: "aniversariantes_dia",
-    sem_compra_90_dias: "clientes_inativos_90_dias",
-    pos_venda_2_dias: "pos_compra_2_dias",
+    sem_compra_90_dias: "clientes_sem_comprar_dias",
+    clientes_inativos_90_dias: "clientes_sem_comprar_dias",
+    contas_a_vencer_2_dias: "contas_a_vencer_dias",
+    pos_venda_2_dias: "pos_compra_dias",
+    pos_compra_2_dias: "pos_compra_dias",
   };
   return aliases[value ?? ""] ?? value ?? "";
 }
 
+function isAutomacaoCobranca(tipo: string | null | undefined) {
+  return tiposAutomacaoCobranca.has(normalizarTipoAutomacao(tipo));
+}
+
 function labelTipoAutomacao(value: string) {
   return tiposAutomacao.find((item) => item.value === normalizarTipoAutomacao(value))?.label ?? "-";
+}
+
+function labelRegraAutomacao(form: FormCampanha) {
+  const tipo = normalizarTipoAutomacao(form.tipoAutomacao);
+  if (tipo === "contas_a_vencer_dias") return `Contas em aberto que vencem em ${form.automacaoDiasAntesVencimento || "X"} dias.`;
+  if (tipo === "clientes_sem_comprar_dias") return `Clientes sem comprar há ${form.automacaoDiasSemCompra || "X"} dias ou mais.`;
+  if (tipo === "pos_compra_dias") return `Clientes cuja última compra ocorreu há ${form.automacaoDiasPosCompra || "X"} dias.`;
+  if (tipo === "contas_vencidas_com_carencia") return `Contas vencidas em aberto dentro de ${form.automacaoDiasCarencia || "X"} dias de carência.`;
+  return labelTipoAutomacao(form.tipoAutomacao);
 }
 
 function intervaloMesAtualCampanhas() {
@@ -316,22 +366,26 @@ function clienteAniversarianteDia(cliente: ClienteCampanha) {
   return nascimento.getMonth() === hoje.getMonth() && nascimento.getDate() === hoje.getDate();
 }
 
-function clienteSemCompra90Dias(cliente: ClienteCampanha) {
+function clienteSemComprarDias(cliente: ClienteCampanha, diasSemCompra: string) {
   const ultimaCompra = dataValida(cliente.dt_ultcomp);
   if (!ultimaCompra) return false;
+  const dias = Number(diasSemCompra);
+  if (!Number.isInteger(dias) || dias < 1) return false;
   const limite = new Date();
   limite.setHours(0, 0, 0, 0);
-  limite.setDate(limite.getDate() - 90);
+  limite.setDate(limite.getDate() - dias);
   return ultimaCompra <= limite;
 }
 
-function clientePosVenda2Dias(cliente: ClienteCampanha) {
+function clientePosCompraDias(cliente: ClienteCampanha, diasPosCompra: string) {
   const ultimaCompra = dataValida(cliente.dt_ultcomp);
   if (!ultimaCompra) return false;
+  const dias = Number(diasPosCompra);
+  if (!Number.isInteger(dias) || dias < 1) return false;
 
   const dataEsperada = new Date();
   dataEsperada.setHours(0, 0, 0, 0);
-  dataEsperada.setDate(dataEsperada.getDate() - 2);
+  dataEsperada.setDate(dataEsperada.getDate() - dias);
 
   return (
     ultimaCompra.getFullYear() === dataEsperada.getFullYear() &&
@@ -340,13 +394,75 @@ function clientePosVenda2Dias(cliente: ClienteCampanha) {
   );
 }
 
-function clienteAtendeTipoAutomacao(cliente: ClienteCampanha, tipoAutomacao: string) {
+function clienteAtendeTipoAutomacao(
+  cliente: ClienteCampanha,
+  tipoAutomacao: string,
+  diasSemCompra: string,
+  diasPosCompra: string,
+) {
   const tipo = normalizarTipoAutomacao(tipoAutomacao);
   if (tipo === "aniversariantes_mes") return clienteAniversarianteMes(cliente);
   if (tipo === "aniversariantes_dia") return clienteAniversarianteDia(cliente);
-  if (tipo === "clientes_inativos_90_dias") return clienteSemCompra90Dias(cliente);
-  if (tipo === "pos_compra_2_dias") return clientePosVenda2Dias(cliente);
+  if (tipo === "clientes_sem_comprar_dias") return clienteSemComprarDias(cliente, diasSemCompra);
+  if (tipo === "pos_compra_dias") return clientePosCompraDias(cliente, diasPosCompra);
   return true;
+}
+
+function contaEmAberto(conta: ContaCampanha) {
+  return !conta.dt_baixa && Number(conta.vlr_receb ?? 0) <= 0;
+}
+
+function contaAtendeTipoAutomacao(
+  conta: ContaCampanha,
+  tipoAutomacao: string,
+  diasCarencia: string,
+  diasAntesVencimento: string,
+) {
+  if (!contaEmAberto(conta)) return false;
+  const vencimento = dataValida(conta.dt_vencto);
+  if (!vencimento) return false;
+  vencimento.setHours(0, 0, 0, 0);
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  const tipo = normalizarTipoAutomacao(tipoAutomacao);
+
+  if (tipo === "contas_a_vencer_dias") {
+    const dias = Number(diasAntesVencimento);
+    if (!Number.isInteger(dias) || dias < 1) return false;
+    const esperada = new Date(hoje);
+    esperada.setDate(esperada.getDate() + dias);
+    return vencimento.getTime() === esperada.getTime();
+  }
+  if (tipo === "contas_vencendo_hoje") return vencimento.getTime() === hoje.getTime();
+  if (tipo === "contas_vencidas_com_carencia") {
+    const carencia = Number(diasCarencia);
+    if (!Number.isInteger(carencia) || carencia < 1 || vencimento >= hoje) return false;
+    const limite = new Date(vencimento);
+    limite.setDate(limite.getDate() + carencia);
+    return limite >= hoje;
+  }
+  return false;
+}
+
+function telefoneContaValido(conta: ContaCampanha) {
+  const telefone = String(conta.cliente_telefone ?? "").replace(/\D/g, "");
+  return telefone.length === 10 || telefone.length === 11 || ((telefone.length === 12 || telefone.length === 13) && telefone.startsWith("55"));
+}
+
+function clienteDaConta(conta: ContaCampanha, clientes: ClienteCampanha[]) {
+  return clientes.find((cliente) => cliente.id_cliente === conta.id_cliente) ?? null;
+}
+
+function motivoBloqueioConta(conta: ContaCampanha, clientes: ClienteCampanha[]) {
+  if (!telefoneContaValido(conta)) return "Telefone inválido";
+  const cliente = clienteDaConta(conta, clientes);
+  if (cliente?.contato_restrito === true) return "Cliente restrito";
+  if (cliente?.permite_campanha !== true) return "Campanha não permitida";
+  return null;
+}
+
+function formatarMoedaCampanha(valor: number | null | undefined) {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(valor ?? 0));
 }
 
 function emailValido(cliente: ClienteCampanha) {
@@ -416,7 +532,7 @@ function clienteAtendeFiltro(cliente: ClienteCampanha, filtro: FiltroPublico, ti
   if (filtro === "campanha_permitida") return clienteAptoParaCanal(cliente, tipoComunicacao);
   if (filtro === "campanha_nao_permitida") return !clienteAptoParaCanal(cliente, tipoComunicacao);
   if (filtro === "aniversariantes_mes") return clienteAniversarianteMes(cliente);
-  if (filtro === "sem_compra_90_dias") return clienteSemCompra90Dias(cliente);
+  if (filtro === "sem_compra_90_dias") return clienteSemComprarDias(cliente, "90");
   if (filtro === "sem_telefone") return !telefoneValido(cliente);
   if (filtro === "restritos") return cliente.contato_restrito === true;
   return true;
@@ -428,7 +544,7 @@ function filtrarClientes(clientes: ClienteCampanha[], form: FormCampanha) {
   const preservarIgnoradosNoAutomatico = form.automatizada && form.filtroPublico === "campanha_permitida";
 
   return clientes.filter((cliente) => {
-    if (form.automatizada && !clienteAtendeTipoAutomacao(cliente, form.tipoAutomacao)) return false;
+    if (form.automatizada && !clienteAtendeTipoAutomacao(cliente, form.tipoAutomacao, form.automacaoDiasSemCompra, form.automacaoDiasPosCompra)) return false;
 
     if (!preservarIgnoradosNoAutomatico && !clienteAtendeFiltro(cliente, form.filtroPublico, form.tipoComunicacao)) {
       return false;
@@ -616,6 +732,7 @@ export function CampanhasPromocao() {
   const { usuario } = useAuth();
   const [campanhas, setCampanhas] = useState<Campanha[]>([]);
   const [clientes, setClientes] = useState<ClienteCampanha[]>([]);
+  const [contas, setContas] = useState<ContaCampanha[]>([]);
   const [destinatariosPorCampanha, setDestinatariosPorCampanha] = useState<Record<string, DestinatarioCampanha[]>>({});
   const [filasPorCampanha, setFilasPorCampanha] = useState<Record<string, number>>({});
   const [carregando, setCarregando] = useState(true);
@@ -658,12 +775,13 @@ export function CampanhasPromocao() {
     if (!usuario?.id_empresa) {
       setCampanhas([]);
       setClientes([]);
+      setContas([]);
       setFilasPorCampanha({});
       setCarregando(false);
       return;
     }
 
-    const [campanhasResult, clientesResult, destinatariosResult, filasResult] = await Promise.all([
+    const [campanhasResult, clientesResult, contasResult, destinatariosResult, filasResult] = await Promise.all([
       supabase
         .from("tab_campanha")
         .select("*")
@@ -675,6 +793,10 @@ export function CampanhasPromocao() {
         .eq("id_empresa", usuario.id_empresa)
         .order("nome", { ascending: true }),
       supabase
+        .from("firebird_contas_receber")
+        .select("id_ctarec, id_empresa, id_cliente, documento, cliente_nome, cliente_telefone, dt_vencto, dt_baixa, vlr_ctarec, vlr_receb")
+        .eq("id_empresa", usuario.id_empresa),
+      supabase
         .from("tab_campanha_clientes")
         .select("id_empresa, id_campanha, id_cliente, nome_cliente, telefone, email, status_envio")
         .eq("id_empresa", usuario.id_empresa),
@@ -685,16 +807,18 @@ export function CampanhasPromocao() {
         .eq("origem_modulo", "CAMPANHA"),
     ]);
 
-    if (campanhasResult.error || clientesResult.error || destinatariosResult.error || filasResult.error) {
+    if (campanhasResult.error || clientesResult.error || contasResult.error || destinatariosResult.error || filasResult.error) {
       setErro(
         campanhasResult.error?.message ||
           clientesResult.error?.message ||
+          contasResult.error?.message ||
           destinatariosResult.error?.message ||
           filasResult.error?.message ||
           "Não foi possível carregar campanhas.",
       );
       setCampanhas([]);
       setClientes([]);
+      setContas([]);
       setDestinatariosPorCampanha({});
       setFilasPorCampanha({});
       setCarregando(false);
@@ -703,6 +827,7 @@ export function CampanhasPromocao() {
 
     setCampanhas((campanhasResult.data ?? []).map(parseCampanha));
     setClientes((clientesResult.data ?? []) as ClienteCampanha[]);
+    setContas((contasResult.data ?? []) as ContaCampanha[]);
     setDestinatariosPorCampanha(
       ((destinatariosResult.data ?? []) as Array<DestinatarioCampanha & { id_campanha: string }>).reduce(
         (acc, destinatario) => {
@@ -796,6 +921,13 @@ export function CampanhasPromocao() {
   );
   const clientesExibidos = clientesFiltrados;
   const ignoradosFiltrados = Math.max(0, clientesFiltrados.length - clientesAptosFiltrados.length);
+  const contasFiltradas = useMemo(
+    () => contas.filter((conta) => contaAtendeTipoAutomacao(conta, form.tipoAutomacao, form.automacaoDiasCarencia, form.automacaoDiasAntesVencimento)),
+    [contas, form.automacaoDiasAntesVencimento, form.automacaoDiasCarencia, form.tipoAutomacao],
+  );
+  const contasAptas = contasFiltradas.filter((conta) => motivoBloqueioConta(conta, clientes) === null);
+  const contasIgnoradas = Math.max(0, contasFiltradas.length - contasAptas.length);
+  const valorContasAptas = contasAptas.reduce((total, conta) => total + Number(conta.vlr_ctarec ?? 0), 0);
   const aptosSelecionados = clientesSelecionados.filter((cliente) =>
     clienteAptoParaCanal(cliente, form.tipoComunicacao),
   );
@@ -824,6 +956,10 @@ export function CampanhasPromocao() {
       empresaDestino: campanha.empresa_destino ?? "",
       automatizada: campanha.automatizada,
       tipoAutomacao: normalizarTipoAutomacao(campanha.tipo_automacao),
+      automacaoDiasCarencia: campanha.automacao_dias_carencia === null ? "" : String(campanha.automacao_dias_carencia),
+      automacaoDiasAntesVencimento: campanha.automacao_dias_antes_vencimento === null ? "" : String(campanha.automacao_dias_antes_vencimento),
+      automacaoDiasSemCompra: campanha.automacao_dias_sem_compra === null ? "" : String(campanha.automacao_dias_sem_compra),
+      automacaoDiasPosCompra: campanha.automacao_dias_pos_compra === null ? "" : String(campanha.automacao_dias_pos_compra),
       campanhaContinua: campanha.campanha_continua ?? false,
       terminaEm: formatarDataInput(campanha.termina_em),
       automacaoStatus: campanha.automacao_status ?? (campanha.automatizada ? "ativa" : "inativa"),
@@ -859,6 +995,10 @@ export function CampanhasPromocao() {
       empresaDestino: campanha.empresa_destino ?? "",
       automatizada: campanha.automatizada,
       tipoAutomacao: normalizarTipoAutomacao(campanha.tipo_automacao),
+      automacaoDiasCarencia: campanha.automacao_dias_carencia === null ? "" : String(campanha.automacao_dias_carencia),
+      automacaoDiasAntesVencimento: campanha.automacao_dias_antes_vencimento === null ? "" : String(campanha.automacao_dias_antes_vencimento),
+      automacaoDiasSemCompra: campanha.automacao_dias_sem_compra === null ? "" : String(campanha.automacao_dias_sem_compra),
+      automacaoDiasPosCompra: campanha.automacao_dias_pos_compra === null ? "" : String(campanha.automacao_dias_pos_compra),
       campanhaContinua: campanha.campanha_continua ?? false,
       terminaEm: "",
       automacaoStatus: campanha.automatizada ? "ativa" : "inativa",
@@ -930,23 +1070,63 @@ export function CampanhasPromocao() {
 
   function irParaEtapa(proximaEtapa: number) {
     if (proximaEtapa === 2 && form.automatizada) {
+      if (!tiposAutomacao.some((item) => item.value === normalizarTipoAutomacao(form.tipoAutomacao))) {
+        setErro("Informe o tipo de automação.");
+        return;
+      }
+      if (normalizarTipoAutomacao(form.tipoAutomacao) === "contas_vencidas_com_carencia") {
+        const dias = Number(form.automacaoDiasCarencia);
+        if (!Number.isInteger(dias) || dias < 1) {
+          setErro("Informe os dias de carência com um número inteiro maior ou igual a 1.");
+          return;
+        }
+      }
+      if (normalizarTipoAutomacao(form.tipoAutomacao) === "contas_a_vencer_dias") {
+        const dias = Number(form.automacaoDiasAntesVencimento);
+        if (!Number.isInteger(dias) || dias < 1) {
+          setErro("Informe os dias antes do vencimento com um número inteiro maior ou igual a 1.");
+          return;
+        }
+      }
+      if (normalizarTipoAutomacao(form.tipoAutomacao) === "clientes_sem_comprar_dias") {
+        const dias = Number(form.automacaoDiasSemCompra);
+        if (!Number.isInteger(dias) || dias < 1) {
+          setErro("Informe os dias sem comprar com um número inteiro maior ou igual a 1.");
+          return;
+        }
+      }
+      if (normalizarTipoAutomacao(form.tipoAutomacao) === "pos_compra_dias") {
+        const dias = Number(form.automacaoDiasPosCompra);
+        if (!Number.isInteger(dias) || dias < 1) {
+          setErro("Informe os dias após a compra com um número inteiro maior ou igual a 1.");
+          return;
+        }
+      }
+      setErro(null);
+    }
+    if (proximaEtapa === 2 && form.automatizada) {
       const filtroAptos = filtrosPublico.find((item) => item.value === "campanha_permitida")!;
       const formPublico: FormCampanha = {
         ...form,
         filtroPublico: "campanha_permitida",
         publicoAlvo: labelFiltroPublico(filtroAptos, form.tipoComunicacao),
       };
-      const candidatos = filtrarClientes(clientes, formPublico);
-      const aptos = candidatos.filter(
-        (cliente) => cliente.id_cliente !== null && clienteAptoParaCanal(cliente, form.tipoComunicacao),
-      );
+      const cobranca = isAutomacaoCobranca(form.tipoAutomacao);
+      const candidatos = cobranca
+        ? contas.filter((conta) => contaAtendeTipoAutomacao(conta, form.tipoAutomacao, form.automacaoDiasCarencia, form.automacaoDiasAntesVencimento))
+        : filtrarClientes(clientes, formPublico);
+      const aptos = cobranca
+        ? (candidatos as ContaCampanha[]).filter((conta) => motivoBloqueioConta(conta, clientes) === null)
+        : (candidatos as ClienteCampanha[]).filter(
+            (cliente) => cliente.id_cliente !== null && clienteAptoParaCanal(cliente, form.tipoComunicacao),
+          );
       const ignorados = Math.max(0, candidatos.length - aptos.length);
 
       setForm(formPublico);
       setSelecionados(new Set());
       setAvisoPublico({
         tipo: "sucesso",
-        mensagem: `Prévia atualizada: ${aptos.length} cliente(s) apto(s) agora e ${ignorados} ignorado(s).`,
+        mensagem: `Prévia atualizada: ${aptos.length} ${cobranca ? "conta(s) apta(s)" : "cliente(s) apto(s)"} agora e ${ignorados} ignorado(s).`,
       });
     } else if (proximaEtapa === 2) {
       setAvisoPublico(null);
@@ -989,6 +1169,22 @@ export function CampanhasPromocao() {
     if (form.automatizada && form.tipoComunicacao !== "whatsapp") return "Campanhas automatizadas devem usar o canal WhatsApp.";
     if (form.automatizada && !tiposAutomacao.some((item) => item.value === normalizarTipoAutomacao(form.tipoAutomacao))) {
       return "Informe o tipo de automação.";
+    }
+    if (form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_vencidas_com_carencia") {
+      const dias = Number(form.automacaoDiasCarencia);
+      if (!Number.isInteger(dias) || dias < 1) return "Informe os dias de carência com um número inteiro maior ou igual a 1.";
+    }
+    if (form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_a_vencer_dias") {
+      const dias = Number(form.automacaoDiasAntesVencimento);
+      if (!Number.isInteger(dias) || dias < 1) return "Informe os dias antes do vencimento com um número inteiro maior ou igual a 1.";
+    }
+    if (form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "clientes_sem_comprar_dias") {
+      const dias = Number(form.automacaoDiasSemCompra);
+      if (!Number.isInteger(dias) || dias < 1) return "Informe os dias sem comprar com um número inteiro maior ou igual a 1.";
+    }
+    if (form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "pos_compra_dias") {
+      const dias = Number(form.automacaoDiasPosCompra);
+      if (!Number.isInteger(dias) || dias < 1) return "Informe os dias após a compra com um número inteiro maior ou igual a 1.";
     }
     if (!form.mensagem.trim()) return "Informe a mensagem da campanha.";
     if (status === "programada" && !form.dataHoraAgendamento) return "Informe data e hora de agendamento.";
@@ -1035,12 +1231,28 @@ export function CampanhasPromocao() {
       },
       tags_publico: form.tagsPublico,
       mensagem: form.mensagem.trim(),
-      id_modelo_mensagem: null,
+      id_modelo_mensagem: modeloSelecionado || null,
       tipo_comunicacao: form.tipoComunicacao,
       status,
       automatizada: form.automatizada,
       publico_dinamico: form.automatizada,
       tipo_automacao: form.automatizada ? normalizarTipoAutomacao(form.tipoAutomacao) : null,
+      automacao_dias_carencia:
+        form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_vencidas_com_carencia"
+          ? Number(form.automacaoDiasCarencia)
+          : null,
+      automacao_dias_antes_vencimento:
+        form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_a_vencer_dias"
+          ? Number(form.automacaoDiasAntesVencimento)
+          : null,
+      automacao_dias_sem_compra:
+        form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "clientes_sem_comprar_dias"
+          ? Number(form.automacaoDiasSemCompra)
+          : null,
+      automacao_dias_pos_compra:
+        form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "pos_compra_dias"
+          ? Number(form.automacaoDiasPosCompra)
+          : null,
       campanha_continua: form.automatizada ? form.campanhaContinua : false,
       termina_em: form.automatizada && !form.campanhaContinua && form.terminaEm
         ? new Date(form.terminaEm).toISOString()
@@ -1056,7 +1268,9 @@ export function CampanhasPromocao() {
       aos_cuidados: form.aosCuidados.trim() || null,
       empresa_destino: form.empresaDestino.trim() || null,
       observacoes: form.observacoes.trim() || null,
-      total_destinatarios: form.automatizada ? clientesAptosFiltrados.length : aptos.length,
+      total_destinatarios: form.automatizada
+        ? isAutomacaoCobranca(form.tipoAutomacao) ? contasAptas.length : clientesAptosFiltrados.length
+        : aptos.length,
       percentual_envio: 0,
     };
 
@@ -1503,6 +1717,10 @@ export function CampanhasPromocao() {
                           automatizada,
                           tipoComunicacao: automatizada ? "whatsapp" : form.tipoComunicacao,
                           tipoAutomacao: automatizada ? form.tipoAutomacao : "",
+                          automacaoDiasCarencia: automatizada ? form.automacaoDiasCarencia : "",
+                          automacaoDiasAntesVencimento: automatizada ? form.automacaoDiasAntesVencimento : "",
+                          automacaoDiasSemCompra: automatizada ? form.automacaoDiasSemCompra : "",
+                          automacaoDiasPosCompra: automatizada ? form.automacaoDiasPosCompra : "",
                           campanhaContinua: automatizada ? form.campanhaContinua : false,
                           terminaEm: automatizada ? form.terminaEm : "",
                           automacaoStatus: automatizada ? "ativa" : "inativa",
@@ -1515,12 +1733,94 @@ export function CampanhasPromocao() {
                     </select>
                   </label>
                   {form.automatizada && (
-                    <label>
+                    <label className="campaign-automation-type-field">
                       <span>Tipo de automação</span>
-                      <select value={form.tipoAutomacao} onChange={(event) => setForm({ ...form, tipoAutomacao: event.target.value })}>
+                      <select
+                        value={form.tipoAutomacao}
+                        onChange={(event) => setForm({
+                          ...form,
+                          tipoAutomacao: event.target.value,
+                          automacaoDiasCarencia: event.target.value === "contas_vencidas_com_carencia" ? form.automacaoDiasCarencia : "",
+                          automacaoDiasAntesVencimento: event.target.value === "contas_a_vencer_dias" ? form.automacaoDiasAntesVencimento : "",
+                          automacaoDiasSemCompra: event.target.value === "clientes_sem_comprar_dias" ? form.automacaoDiasSemCompra : "",
+                          automacaoDiasPosCompra: event.target.value === "pos_compra_dias" ? form.automacaoDiasPosCompra : "",
+                        })}
+                      >
                         <option value="">Selecione</option>
                         {tiposAutomacao.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
                       </select>
+                    </label>
+                  )}
+                  {form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_vencidas_com_carencia" && (
+                    <label className="campaign-grace-field">
+                      <span>Dias de carência</span>
+                      <div>
+                        <input
+                          type="number"
+                          min="1"
+                          max="9999"
+                          step="1"
+                          value={form.automacaoDiasCarencia}
+                          onChange={(event) => setForm({ ...form, automacaoDiasCarencia: event.target.value.slice(0, 4) })}
+                          placeholder="Ex: 3"
+                          disabled={salvando}
+                        />
+                        <small>Informe por quantos dias após o vencimento a conta ficará em período de carência.</small>
+                      </div>
+                    </label>
+                  )}
+                  {form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_a_vencer_dias" && (
+                    <label className="campaign-grace-field">
+                      <span>Dias antes do vencimento</span>
+                      <div>
+                        <input
+                          type="number"
+                          min="1"
+                          max="9999"
+                          step="1"
+                          value={form.automacaoDiasAntesVencimento}
+                          onChange={(event) => setForm({ ...form, automacaoDiasAntesVencimento: event.target.value.slice(0, 4) })}
+                          placeholder="Ex: 2"
+                          disabled={salvando}
+                        />
+                        <small>Informe quantos dias antes do vencimento a mensagem será enviada.</small>
+                      </div>
+                    </label>
+                  )}
+                  {form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "clientes_sem_comprar_dias" && (
+                    <label className="campaign-grace-field">
+                      <span>Dias sem comprar</span>
+                      <div>
+                        <input
+                          type="number"
+                          min="1"
+                          max="9999"
+                          step="1"
+                          value={form.automacaoDiasSemCompra}
+                          onChange={(event) => setForm({ ...form, automacaoDiasSemCompra: event.target.value.slice(0, 4) })}
+                          placeholder="Ex: 90"
+                          disabled={salvando}
+                        />
+                        <small>Informe há quantos dias sem compra o cliente deve estar para entrar nesta automação.</small>
+                      </div>
+                    </label>
+                  )}
+                  {form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "pos_compra_dias" && (
+                    <label className="campaign-grace-field">
+                      <span>Dias após a compra</span>
+                      <div>
+                        <input
+                          type="number"
+                          min="1"
+                          max="9999"
+                          step="1"
+                          value={form.automacaoDiasPosCompra}
+                          onChange={(event) => setForm({ ...form, automacaoDiasPosCompra: event.target.value.slice(0, 4) })}
+                          placeholder="Ex: 2"
+                          disabled={salvando}
+                        />
+                        <small>Informe quantos dias após a última compra a mensagem será enviada.</small>
+                      </div>
                     </label>
                   )}
                 </section>
@@ -1532,13 +1832,15 @@ export function CampanhasPromocao() {
                     <div className="campaign-dynamic-audience-intro">
                       <div>
                         <h3>Público dinâmico da automação</h3>
-                        <strong>Regra aplicada: {labelTipoAutomacao(form.tipoAutomacao)}</strong>
+                        <strong>Regra aplicada: {labelRegraAutomacao(form)}</strong>
                       </div>
-                      <p>Este público é dinâmico. A lista abaixo é apenas uma prévia com base nos clientes cadastrados agora. Novos clientes que se enquadrarem nesta regra serão incluídos automaticamente quando a automação for executada.</p>
+                      <p>{isAutomacaoCobranca(form.tipoAutomacao)
+                        ? "Este público é dinâmico. A lista abaixo é uma prévia das contas a receber que se enquadram na regra neste momento. Novas contas ou clientes elegíveis serão considerados automaticamente quando a automação for executada."
+                        : "Este público é dinâmico. A lista abaixo é apenas uma prévia com base nos clientes cadastrados agora. Novos clientes que se enquadrarem nesta regra serão incluídos automaticamente quando a automação for executada."}</p>
                     </div>
                   )}
                   <div className="campaign-audience-filters">
-                    <label>
+                    {!isAutomacaoCobranca(form.tipoAutomacao) && <label>
                       <span>Filtro rápido</span>
                       <select
                         value={form.filtroPublico}
@@ -1559,19 +1861,19 @@ export function CampanhasPromocao() {
                           </option>
                         ))}
                       </select>
-                    </label>
-                    <label>
+                    </label>}
+                    {!isAutomacaoCobranca(form.tipoAutomacao) && <label>
                       <span>Buscar cliente</span>
                       <input
                         value={form.buscaCliente}
                         onChange={(event) => setForm({ ...form, buscaCliente: event.target.value })}
                         placeholder="Nome, código, telefone ou e-mail"
                       />
-                    </label>
-                    <label>
+                    </label>}
+                    {!isAutomacaoCobranca(form.tipoAutomacao) && <label>
                       <span>Buscar por tag</span>
                       <input value={form.buscaTag} onChange={(event) => setForm({ ...form, buscaTag: event.target.value })} placeholder="Tag" />
-                    </label>
+                    </label>}
                     <div className="campaign-audience-actions campaign-full-field">
                       {form.automatizada ? (
                         <button className="secondary-button" type="button" onClick={() => void carregarDados()} disabled={carregando}>
@@ -1603,13 +1905,34 @@ export function CampanhasPromocao() {
                   )}
 
                   <div className="campaign-audience-summary">
-                    <span>{form.automatizada ? "Encontrados agora" : "Encontrados"}: {clientesFiltrados.length}</span>
+                    <span>{isAutomacaoCobranca(form.tipoAutomacao) ? "Contas encontradas agora" : form.automatizada ? "Encontrados agora" : "Encontrados"}: {isAutomacaoCobranca(form.tipoAutomacao) ? contasFiltradas.length : clientesFiltrados.length}</span>
                     {!form.automatizada && <span>Selecionados: {aptosSelecionados.length}</span>}
-                    <span>{form.automatizada ? "Aptos para WhatsApp agora" : "Aptos"}: {clientesAptosFiltrados.length}</span>
-                    <span>{form.automatizada ? "Ignorados agora" : "Ignorados"}: {ignoradosFiltrados}</span>
+                    <span>{form.automatizada ? "Aptos para WhatsApp agora" : "Aptos"}: {isAutomacaoCobranca(form.tipoAutomacao) ? contasAptas.length : clientesAptosFiltrados.length}</span>
+                    <span>{form.automatizada ? "Ignorados agora" : "Ignorados"}: {isAutomacaoCobranca(form.tipoAutomacao) ? contasIgnoradas : ignoradosFiltrados}</span>
+                    {isAutomacaoCobranca(form.tipoAutomacao) && <span>Total apto: {formatarMoedaCampanha(valorContasAptas)}</span>}
                   </div>
 
                   <div className="table-wrap campaign-clients-wrap">
+                    {isAutomacaoCobranca(form.tipoAutomacao) ? (
+                      <table className="campaign-clients-table campaign-accounts-preview-table">
+                        <thead><tr><th>Cliente</th><th>Telefone</th><th>Documento</th><th>Vencimento</th><th>Valor</th><th>Situação</th><th>Motivo</th></tr></thead>
+                        <tbody>
+                          {contasFiltradas.length === 0 && <tr><td colSpan={7}>Nenhuma conta encontrada para a regra atual.</td></tr>}
+                          {contasFiltradas.map((conta) => {
+                            const motivo = motivoBloqueioConta(conta, clientes);
+                            return <tr key={`${conta.id_empresa}-${conta.id_ctarec}`}>
+                              <td>{conta.cliente_nome ?? "-"}</td>
+                              <td>{conta.cliente_telefone ?? "-"}</td>
+                              <td>{conta.documento ?? "-"}</td>
+                              <td>{formatarDataSimples(conta.dt_vencto)}</td>
+                              <td>{formatarMoedaCampanha(conta.vlr_ctarec)}</td>
+                              <td><span className={`campaign-client-status ${motivo ? "campaign-client-status-restricted" : "campaign-client-status-ok"}`}>{motivo ? "Ignorada" : "Apta"}</span></td>
+                              <td>{motivo ?? "-"}</td>
+                            </tr>;
+                          })}
+                        </tbody>
+                      </table>
+                    ) : (
                     <table className="campaign-clients-table">
                       <colgroup>
                         {!form.automatizada && <col className="campaign-client-col-select" />}
@@ -1696,6 +2019,7 @@ export function CampanhasPromocao() {
                         })}
                       </tbody>
                     </table>
+                    )}
                   </div>
                 </section>
               )}
@@ -1727,7 +2051,7 @@ export function CampanhasPromocao() {
                     />
                   </label>
                   <p className="field-help campaign-full-field">
-                    A mensagem continuará editável. Variáveis disponíveis: {"{{nome}}"}, {"{{cliente}}"}, {"{{empresa}}"}, {"{{documento}}"}, {"{{data_atual}}"}, {"{{ultima_compra}}"} e {"{{primeira_compra}}"}.
+                    A mensagem continuará editável. Variáveis disponíveis: {"{{nome}}"}, {"{{cliente}}"}, {"{{empresa}}"}, {"{{documento}}"}, {"{{vencimento}}"}, {"{{valor}}"}, {"{{data_atual}}"}, {"{{ultima_compra}}"} e {"{{primeira_compra}}"}.
                   </p>
                   <label className="campaign-upload-field">
                     <span>Arquivo ou imagem</span>
@@ -1795,15 +2119,17 @@ export function CampanhasPromocao() {
                     <strong>{form.nome || "Campanha sem nome"}</strong>
                     <span>{tipoLabel(form.tipoComunicacao)} · {form.publicoAlvo || "-"}</span>
                     <p>{form.automatizada
-                      ? `Automatizada: Sim · ${labelTipoAutomacao(form.tipoAutomacao)} · ${form.campanhaContinua ? "Campanha contínua" : `Termina em ${formatarDataHora(form.terminaEm ? new Date(form.terminaEm).toISOString() : null)}`}`
+                      ? `Automatizada: Sim · ${labelRegraAutomacao(form)} · ${form.campanhaContinua ? "Campanha contínua" : `Termina em ${formatarDataHora(form.terminaEm ? new Date(form.terminaEm).toISOString() : null)}`}`
                       : form.objetivo || "-"}</p>
                   </div>
                   <div className="campaign-review-card">
                     <strong>{form.automatizada ? "Prévia do público dinâmico" : "Público selecionado"}</strong>
                     <span>{form.automatizada
-                      ? `Encontrados agora: ${clientesFiltrados.length} · Aptos agora: ${clientesAptosFiltrados.length} · Ignorados agora: ${ignoradosFiltrados}`
+                      ? isAutomacaoCobranca(form.tipoAutomacao)
+                        ? `Contas encontradas agora: ${contasFiltradas.length} · Aptas agora: ${contasAptas.length} · Ignoradas agora: ${contasIgnoradas}`
+                        : `Encontrados agora: ${clientesFiltrados.length} · Aptos agora: ${clientesAptosFiltrados.length} · Ignorados agora: ${ignoradosFiltrados}`
                       : `Total: ${clientesSelecionados.length} · Aptos: ${aptosSelecionados.length} · Ignorados: ${ignoradosSelecionados}`}</span>
-                    <p>{form.automatizada ? "A execução buscará novamente os clientes que atenderem à regra." : form.mensagem || "-"}</p>
+                    <p>{form.automatizada ? `A execução buscará novamente ${isAutomacaoCobranca(form.tipoAutomacao) ? "as contas" : "os clientes"} que atenderem à regra.` : form.mensagem || "-"}</p>
                   </div>
                 </section>
               )}

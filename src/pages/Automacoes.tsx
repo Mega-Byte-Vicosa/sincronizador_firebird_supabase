@@ -12,6 +12,10 @@ interface CampanhaAutomatizada {
   objetivo: string | null;
   mensagem: string | null;
   tipo_automacao: string | null;
+  automacao_dias_carencia: number | null;
+  automacao_dias_antes_vencimento: number | null;
+  automacao_dias_sem_compra: number | null;
+  automacao_dias_pos_compra: number | null;
   publico_dinamico: boolean;
   campanha_continua: boolean;
   termina_em: string | null;
@@ -35,12 +39,26 @@ interface ClienteAutomacao {
   contato_restrito: boolean | null;
 }
 
+interface ContaAutomacao {
+  id_ctarec: number;
+  id_cliente: number | null;
+  dt_vencto: string | null;
+  dt_baixa: string | null;
+  vlr_receb: number | null;
+  cliente_telefone: string | null;
+}
+
 const tipoLabels: Record<string, string> = {
   aniversariantes_mes: "Aniversariantes do mês",
   aniversariantes_dia: "Aniversariantes do dia",
-  clientes_inativos_90_dias: "Clientes sem compra há mais de 90 dias",
-  pos_compra_2_dias: "Pós-compra de 2 dias",
+  clientes_sem_comprar_dias: "Cliente sem comprar por dias",
+  pos_compra_dias: "Pós-compra por dias",
+  contas_a_vencer_dias: "A vencer em dias",
+  contas_vencendo_hoje: "Vencendo hoje",
+  contas_vencidas_com_carencia: "Vencida com Carência",
 };
+
+const tiposCobranca = new Set(["contas_a_vencer_dias", "contas_vencendo_hoje", "contas_vencidas_com_carencia"]);
 
 const statusLabels: Record<AutomacaoStatus, string> = {
   inativa: "Inativa",
@@ -49,6 +67,13 @@ const statusLabels: Record<AutomacaoStatus, string> = {
   encerrada: "Encerrada",
   erro: "Com erro",
 };
+
+function labelAutomacao(automacao: CampanhaAutomatizada) {
+  if (automacao.tipo_automacao === "contas_a_vencer_dias") return `A vencer em ${automacao.automacao_dias_antes_vencimento ?? "-"} dias`;
+  if (automacao.tipo_automacao === "clientes_sem_comprar_dias") return `Cliente sem comprar por ${automacao.automacao_dias_sem_compra ?? "-"} dias`;
+  if (automacao.tipo_automacao === "pos_compra_dias") return `Pós-compra em ${automacao.automacao_dias_pos_compra ?? "-"} dias`;
+  return tipoLabels[automacao.tipo_automacao ?? ""] ?? "-";
+}
 
 function normalizar(value: unknown) {
   return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
@@ -89,19 +114,20 @@ function dataCivil(value: string | null) {
   return ano && mes && dia ? new Date(ano, mes - 1, dia) : null;
 }
 
-function atendeRegra(cliente: ClienteAutomacao, tipo: string | null) {
+function atendeRegra(cliente: ClienteAutomacao, automacao: CampanhaAutomatizada) {
+  const tipo = automacao.tipo_automacao;
   const hoje = new Date();
   hoje.setHours(0, 0, 0, 0);
   const nascimento = dataCivil(cliente.dt_nascto);
   const ultimaCompra = dataCivil(cliente.dt_ultcomp);
   if (tipo === "aniversariantes_mes") return Boolean(nascimento && nascimento.getMonth() === hoje.getMonth());
   if (tipo === "aniversariantes_dia") return Boolean(nascimento && nascimento.getMonth() === hoje.getMonth() && nascimento.getDate() === hoje.getDate());
-  if (tipo === "clientes_inativos_90_dias") {
-    const limite = new Date(hoje); limite.setDate(limite.getDate() - 90);
+  if (tipo === "clientes_sem_comprar_dias") {
+    const limite = new Date(hoje); limite.setDate(limite.getDate() - Number(automacao.automacao_dias_sem_compra ?? 0));
     return Boolean(ultimaCompra && ultimaCompra <= limite);
   }
-  if (tipo === "pos_compra_2_dias") {
-    const esperada = new Date(hoje); esperada.setDate(esperada.getDate() - 2);
+  if (tipo === "pos_compra_dias") {
+    const esperada = new Date(hoje); esperada.setDate(esperada.getDate() - Number(automacao.automacao_dias_pos_compra ?? 0));
     return Boolean(ultimaCompra && ultimaCompra.getTime() === esperada.getTime());
   }
   return false;
@@ -110,6 +136,28 @@ function atendeRegra(cliente: ClienteAutomacao, tipo: string | null) {
 function clienteApto(cliente: ClienteAutomacao) {
   const telefone = `${cliente.ddd_celul ?? ""}${cliente.fone_celul ?? ""}`.replace(/\D/g, "");
   return (telefone.length === 10 || telefone.length === 11) && cliente.contato_restrito !== true && cliente.permite_campanha === true;
+}
+
+function contaAtendeRegra(conta: ContaAutomacao, automacao: CampanhaAutomatizada) {
+  if (conta.dt_baixa || Number(conta.vlr_receb ?? 0) > 0) return false;
+  const vencimento = dataCivil(conta.dt_vencto);
+  if (!vencimento) return false;
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  if (automacao.tipo_automacao === "contas_a_vencer_dias") {
+    const esperada = new Date(hoje); esperada.setDate(esperada.getDate() + Number(automacao.automacao_dias_antes_vencimento ?? 0));
+    return vencimento.getTime() === esperada.getTime();
+  }
+  if (automacao.tipo_automacao === "contas_vencendo_hoje") return vencimento.getTime() === hoje.getTime();
+  if (automacao.tipo_automacao === "contas_vencidas_com_carencia") {
+    const limite = new Date(vencimento); limite.setDate(limite.getDate() + Number(automacao.automacao_dias_carencia ?? 0));
+    return vencimento < hoje && limite >= hoje;
+  }
+  return false;
+}
+
+function telefoneContaValido(conta: ContaAutomacao) {
+  const telefone = String(conta.cliente_telefone ?? "").replace(/\D/g, "");
+  return telefone.length === 10 || telefone.length === 11 || ((telefone.length === 12 || telefone.length === 13) && telefone.startsWith("55"));
 }
 
 type AutomationIconName = "view" | "pause" | "play" | "stop" | "history" | "close";
@@ -131,6 +179,7 @@ export function Automacoes() {
   const mesAtual = useMemo(periodoMesAtual, []);
   const [automacoes, setAutomacoes] = useState<CampanhaAutomatizada[]>([]);
   const [clientes, setClientes] = useState<ClienteAutomacao[]>([]);
+  const [contas, setContas] = useState<ContaAutomacao[]>([]);
   const [busca, setBusca] = useState("");
   const [tipo, setTipo] = useState("todos");
   const [status, setStatus] = useState("todos");
@@ -146,28 +195,34 @@ export function Automacoes() {
     if (!usuario?.id_empresa) {
       setAutomacoes([]);
       setClientes([]);
+      setContas([]);
       setCarregando(false);
       return;
     }
 
     setCarregando(true);
     setErro(null);
-    const [campanhasResult, clientesResult] = await Promise.all([
+    const [campanhasResult, clientesResult, contasResult] = await Promise.all([
       supabase.from("tab_campanha")
-        .select("id, id_empresa, nome, objetivo, mensagem, tipo_automacao, publico_dinamico, campanha_continua, termina_em, automacao_status, automacao_ultima_execucao_em, automacao_proxima_execucao_em, automacao_total_envios, automacao_total_erros, data_hora_criacao, data_hora_agendamento, criado_em")
+        .select("id, id_empresa, nome, objetivo, mensagem, tipo_automacao, automacao_dias_carencia, automacao_dias_antes_vencimento, automacao_dias_sem_compra, automacao_dias_pos_compra, publico_dinamico, campanha_continua, termina_em, automacao_status, automacao_ultima_execucao_em, automacao_proxima_execucao_em, automacao_total_envios, automacao_total_erros, data_hora_criacao, data_hora_agendamento, criado_em")
         .eq("id_empresa", usuario.id_empresa).eq("automatizada", true).order("criado_em", { ascending: false }),
       supabase.from("tab_cliente")
         .select("id_cliente, dt_nascto, dt_ultcomp, ddd_celul, fone_celul, permite_campanha, contato_restrito")
         .eq("id_empresa", usuario.id_empresa),
+      supabase.from("firebird_contas_receber")
+        .select("id_ctarec, id_cliente, dt_vencto, dt_baixa, vlr_receb, cliente_telefone")
+        .eq("id_empresa", usuario.id_empresa),
     ]);
 
-    if (campanhasResult.error || clientesResult.error) {
+    if (campanhasResult.error || clientesResult.error || contasResult.error) {
       setAutomacoes([]);
       setClientes([]);
+      setContas([]);
       setErro("Não foi possível carregar as automações.");
     } else {
       setAutomacoes((campanhasResult.data ?? []) as CampanhaAutomatizada[]);
       setClientes((clientesResult.data ?? []) as ClienteAutomacao[]);
+      setContas((contasResult.data ?? []) as ContaAutomacao[]);
     }
     setCarregando(false);
   }, [usuario?.id_empresa]);
@@ -202,7 +257,15 @@ export function Automacoes() {
   }), [automacoes]);
 
   function obterPrevia(automacao: CampanhaAutomatizada) {
-    const encontrados = clientes.filter((cliente) => atendeRegra(cliente, automacao.tipo_automacao));
+    if (tiposCobranca.has(automacao.tipo_automacao ?? "")) {
+      const encontrados = contas.filter((conta) => contaAtendeRegra(conta, automacao));
+      const aptos = encontrados.filter((conta) => {
+        const cliente = clientes.find((item) => item.id_cliente === conta.id_cliente);
+        return telefoneContaValido(conta) && cliente?.contato_restrito !== true && cliente?.permite_campanha === true;
+      });
+      return { encontrados: encontrados.length, aptos: aptos.length, ignorados: encontrados.length - aptos.length };
+    }
+    const encontrados = clientes.filter((cliente) => atendeRegra(cliente, automacao));
     const aptos = encontrados.filter(clienteApto);
     return { encontrados: encontrados.length, aptos: aptos.length, ignorados: encontrados.length - aptos.length };
   }
@@ -275,7 +338,7 @@ export function Automacoes() {
               const atual = statusEfetivo(automacao);
               const previa = obterPrevia(automacao);
               return <tr key={automacao.id}>
-                <td><strong>{automacao.nome}</strong></td><td>{tipoLabels[automacao.tipo_automacao ?? ""] ?? "-"}</td>
+                <td><strong>{automacao.nome}</strong></td><td>{labelAutomacao(automacao)}</td>
                 <td><span className="automation-continuous">Dinâmico</span></td><td>{previa.aptos}</td><td>{previa.ignorados}</td>
                 <td><span className={`automation-status automation-status-${atual}`}>{statusLabels[atual]}</span></td>
                 <td>{formatarDataHora(automacao.data_hora_agendamento || automacao.data_hora_criacao)}</td>
@@ -298,7 +361,7 @@ export function Automacoes() {
       {detalhes && <div className="modal-backdrop" role="presentation" onClick={() => setDetalhes(null)}>
         <aside className="automation-details-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
           <header><div><h2>{detalhes.nome}</h2><span className={`automation-status automation-status-${statusEfetivo(detalhes)}`}>{statusLabels[statusEfetivo(detalhes)]}</span></div><button type="button" onClick={() => setDetalhes(null)} aria-label="Fechar"><AutomationIcon name="close" /></button></header>
-          <dl><div><dt>Tipo de automação</dt><dd>{tipoLabels[detalhes.tipo_automacao ?? ""] ?? "-"}</dd></div><div><dt>Público</dt><dd>Dinâmico</dd></div><div><dt>Aptos agora</dt><dd>{obterPrevia(detalhes).aptos}</dd></div><div><dt>Ignorados agora</dt><dd>{obterPrevia(detalhes).ignorados}</dd></div><div><dt>Início</dt><dd>{formatarDataHora(detalhes.data_hora_agendamento || detalhes.data_hora_criacao)}</dd></div><div><dt>Termina em</dt><dd>{detalhes.campanha_continua ? "Campanha contínua" : formatarDataHora(detalhes.termina_em)}</dd></div><div><dt>Total de envios</dt><dd>{detalhes.automacao_total_envios}</dd></div><div><dt>Total de erros</dt><dd>{detalhes.automacao_total_erros}</dd></div></dl>
+          <dl><div><dt>Tipo de automação</dt><dd>{labelAutomacao(detalhes)}</dd></div><div><dt>Público</dt><dd>Dinâmico</dd></div>{detalhes.tipo_automacao === "contas_vencidas_com_carencia" && <div><dt>Dias de carência</dt><dd>{detalhes.automacao_dias_carencia ?? "-"}</dd></div>}{detalhes.tipo_automacao === "contas_a_vencer_dias" && <div><dt>Dias antes do vencimento</dt><dd>{detalhes.automacao_dias_antes_vencimento ?? "-"}</dd></div>}{detalhes.tipo_automacao === "clientes_sem_comprar_dias" && <div><dt>Dias sem comprar</dt><dd>{detalhes.automacao_dias_sem_compra ?? "-"}</dd></div>}{detalhes.tipo_automacao === "pos_compra_dias" && <div><dt>Dias após a compra</dt><dd>{detalhes.automacao_dias_pos_compra ?? "-"}</dd></div>}<div><dt>Aptos agora</dt><dd>{obterPrevia(detalhes).aptos}</dd></div><div><dt>Ignorados agora</dt><dd>{obterPrevia(detalhes).ignorados}</dd></div><div><dt>Início</dt><dd>{formatarDataHora(detalhes.data_hora_agendamento || detalhes.data_hora_criacao)}</dd></div><div><dt>Termina em</dt><dd>{detalhes.campanha_continua ? "Campanha contínua" : formatarDataHora(detalhes.termina_em)}</dd></div><div><dt>Total de envios</dt><dd>{detalhes.automacao_total_envios}</dd></div><div><dt>Total de erros</dt><dd>{detalhes.automacao_total_erros}</dd></div></dl>
           <section><h3>Mensagem</h3><p>{detalhes.mensagem || "-"}</p></section>
         </aside>
       </div>}

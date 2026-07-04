@@ -8583,6 +8583,39 @@ dd {
   font-weight: 750;
 }
 
+.campaign-form-grid .campaign-automation-type-field {
+  align-self: start;
+  grid-template-rows: auto 36px;
+}
+
+.campaign-automation-type-field select {
+  height: 36px;
+}
+
+.campaign-form-grid .campaign-grace-field {
+  align-self: start;
+  grid-column: span 2;
+}
+
+.campaign-grace-field > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.campaign-form-grid .campaign-grace-field input {
+  flex: 0 0 86px;
+  width: 86px;
+}
+
+.campaign-grace-field small {
+  max-width: 360px;
+  color: #64748b;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
 .campaign-channel-field {
   display: grid;
   gap: 5px;
@@ -9087,6 +9120,15 @@ dd {
   .campaign-review-grid,
   .campaign-audience-filters {
     grid-template-columns: 1fr;
+  }
+
+  .campaign-form-grid .campaign-grace-field {
+    grid-column: auto;
+  }
+
+  .campaign-grace-field > div {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .campaign-form-modal {
