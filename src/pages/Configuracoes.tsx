@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../auth/AuthContext";
+import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 
 const secoes = ["Mensagens automáticas", "Parâmetros de envio", "Manutenção da integração"];
 
@@ -498,12 +499,7 @@ export function Configuracoes() {
 
   return (
     <main className="settings-page">
-      <header className="dashboard-header">
-        <div>
-          <h1>Configurações</h1>
-          <p>Gerencie as configurações do sistema e da integração com WhatsApp.</p>
-        </div>
-      </header>
+      <GlobalPageHeader title="Configurações" subtitle="Gerencie as configurações do sistema e da integração com WhatsApp." icon="settings" />
 
       <section className="settings-panel">
         <div className="panel-title">

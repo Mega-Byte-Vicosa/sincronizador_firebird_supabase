@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { useAuth } from "../auth/AuthContext";
 import { MetricCardIcon } from "../components/layout/MetricCardIcon";
 import { supabase } from "../lib/supabaseClient";
+import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 
 type AutomacaoStatus = "inativa" | "ativa" | "pausada" | "encerrada" | "erro";
 
@@ -46,6 +47,7 @@ interface ContaAutomacao {
   dt_baixa: string | null;
   vlr_receb: number | null;
   cliente_telefone: string | null;
+  dias_carencia: number | null;
 }
 
 const tipoLabels: Record<string, string> = {
@@ -56,9 +58,10 @@ const tipoLabels: Record<string, string> = {
   contas_a_vencer_dias: "A vencer em dias",
   contas_vencendo_hoje: "Vencendo hoje",
   contas_vencidas_com_carencia: "Vencida com Carência",
+  contas_vencidas: "Vencidas",
 };
 
-const tiposCobranca = new Set(["contas_a_vencer_dias", "contas_vencendo_hoje", "contas_vencidas_com_carencia"]);
+const tiposCobranca = new Set(["contas_a_vencer_dias", "contas_vencendo_hoje", "contas_vencidas_com_carencia", "contas_vencidas"]);
 
 const statusLabels: Record<AutomacaoStatus, string> = {
   inativa: "Inativa",
@@ -152,6 +155,11 @@ function contaAtendeRegra(conta: ContaAutomacao, automacao: CampanhaAutomatizada
     const limite = new Date(vencimento); limite.setDate(limite.getDate() + Number(automacao.automacao_dias_carencia ?? 0));
     return vencimento < hoje && limite >= hoje;
   }
+  if (automacao.tipo_automacao === "contas_vencidas") {
+    const limite = new Date(vencimento);
+    limite.setDate(limite.getDate() + Math.max(0, Number(conta.dias_carencia ?? 0)));
+    return vencimento < hoje && limite < hoje;
+  }
   return false;
 }
 
@@ -210,7 +218,7 @@ export function Automacoes() {
         .select("id_cliente, dt_nascto, dt_ultcomp, ddd_celul, fone_celul, permite_campanha, contato_restrito")
         .eq("id_empresa", usuario.id_empresa),
       supabase.from("firebird_contas_receber")
-        .select("id_ctarec, id_cliente, dt_vencto, dt_baixa, vlr_receb, cliente_telefone")
+        .select("id_ctarec, id_cliente, dt_vencto, dt_baixa, vlr_receb, cliente_telefone, dias_carencia")
         .eq("id_empresa", usuario.id_empresa),
     ]);
 
@@ -299,10 +307,9 @@ export function Automacoes() {
 
   return (
     <main className="page-shell automations-page">
-      <header className="page-header">
-        <div><h1>Automações</h1><p>Gerencie campanhas automatizadas e monitoradas para envio via WhatsApp.</p></div>
+      <GlobalPageHeader title="Automações" subtitle="Gerencie campanhas automatizadas e monitoradas para envio via WhatsApp." icon="automation" actions={
         <button className="secondary-button" type="button" onClick={() => void carregar()} disabled={carregando}>Atualizar</button>
-      </header>
+      } />
 
       <section className="summary-grid automations-summary-grid" aria-label="Resumo de automações">
         {cards.map((card) => (

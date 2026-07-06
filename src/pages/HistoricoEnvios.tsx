@@ -4,6 +4,7 @@ import type { WhatsappEnvio } from "../types/whatsappEnvio";
 import { formatarDataHora } from "./ContasAReceber";
 import { MetricCardIcon } from "../components/layout/MetricCardIcon";
 import { useAuth } from "../auth/AuthContext";
+import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 
 interface FiltrosHistorico {
   busca: string;
@@ -272,15 +273,9 @@ export function HistoricoEnvios() {
 
   return (
     <main className="history-page">
-      <header className="dashboard-header">
-        <div>
-          <h1>Histórico de Envio de Mensagens</h1>
-          <p>Acompanhe os envios e reenvios de mensagens realizados para clientes.</p>
-        </div>
-        <button className="secondary-button" type="button" onClick={carregarEnvios} disabled={carregando}>
-          Atualizar
-        </button>
-      </header>
+      <GlobalPageHeader title="Histórico de Envio de Mensagens" subtitle="Acompanhe os envios e reenvios de mensagens realizados para clientes." icon="history" actions={
+        <button className="secondary-button" type="button" onClick={carregarEnvios} disabled={carregando}>Atualizar</button>
+      } />
 
       <section className="summary-grid history-summary-grid" aria-label="Resumo de envios">
         {cards.map((card) => (

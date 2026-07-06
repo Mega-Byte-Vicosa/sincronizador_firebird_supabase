@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../auth/AuthContext";
 import type { ContaReceber } from "../types/contasReceber";
 import { formatarDataHora, formatarMoeda } from "./ContasAReceber";
+import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 
 type DashboardCardIcon = "clientes" | "valor" | "vencendo" | "recebidas";
 
@@ -29,6 +30,18 @@ interface BtzapConfigDashboard {
   metodo_envio_texto: string | null;
   formato_payload: string | null;
   atualizado_em: string | null;
+  ultimo_status_instancia: string | null;
+  ultimo_status_em: string | null;
+  ultimo_connected: boolean | null;
+  ultimo_logged_in: boolean | null;
+}
+
+interface BtzapStatusDashboard {
+  success?: boolean;
+  connected?: boolean;
+  loggedIn?: boolean;
+  status?: string | null;
+  lastStatusAt?: string | null;
 }
 
 interface WhatsappEnvioDashboard {
@@ -219,6 +232,19 @@ function calcularStatusWhatsapp(config: BtzapConfigDashboard | null) {
   };
 }
 
+function statusWhatsappConectado(status: BtzapStatusDashboard | null, config: BtzapConfigDashboard | null) {
+  const textoStatus = String(status ? status.status : config?.ultimo_status_instancia ?? "").trim().toLowerCase();
+
+  return Boolean(
+    (status
+      ? status.connected === true || status.loggedIn === true
+      : config?.ultimo_connected === true || config?.ultimo_logged_in === true) ||
+      textoStatus === "connected" ||
+      textoStatus === "open" ||
+      textoStatus === "conectado"
+  );
+}
+
 function dataEstaHoje(valor: string | null | undefined) {
   return normalizarData(valor) === hojeISO();
 }
@@ -321,18 +347,25 @@ export function Dashboard() {
       const inicioHoje = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()).toISOString();
       const fimHoje = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 1).toISOString();
 
-      const { data: config, error: configError } = await supabase
-        .from("tab_btzap_config")
-        .select(
-          "id, nome_instancia, url_servidor, token_instancia, ativo, endpoint_envio_texto, metodo_envio_texto, formato_payload, atualizado_em",
-        )
-        .eq("id_empresa", usuario.id_empresa)
-        .eq("ativo", true)
-        .order("atualizado_em", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data: configResponse, error: configError } = await supabase.functions.invoke("btzap-get-config", {
+        body: { id_empresa: usuario.id_empresa },
+      });
 
       if (configError) throw configError;
+      if (configResponse?.success === false) throw new Error(configResponse.message ?? "Erro ao carregar configuração do WhatsApp.");
+
+      const config = (configResponse?.config ?? null) as BtzapConfigDashboard | null;
+      let statusInstancia: BtzapStatusDashboard | null = null;
+
+      if (config) {
+        const { data: statusResponse, error: statusError } = await supabase.functions.invoke("btzap-instance-status", {
+          body: { id_empresa: usuario.id_empresa },
+        });
+
+        if (!statusError && statusResponse?.success !== false) {
+          statusInstancia = statusResponse as BtzapStatusDashboard;
+        }
+      }
 
       const { data: enviosHoje, error: enviosError } = await supabase
         .from("tab_whatsapp_envios")
@@ -343,9 +376,17 @@ export function Dashboard() {
 
       if (enviosError) throw enviosError;
 
-      const configBtzap = (config ?? null) as BtzapConfigDashboard | null;
+      const configBtzap = config;
       const envios = (enviosHoje ?? []) as WhatsappEnvioDashboard[];
-      const statusCalculado = calcularStatusWhatsapp(configBtzap);
+      const statusConfiguracao = calcularStatusWhatsapp(configBtzap);
+      const configuracaoValida = statusConfiguracao.status === "Configurado";
+      const conectado = configuracaoValida && statusWhatsappConectado(statusInstancia, configBtzap);
+      const statusCalculado = configuracaoValida
+        ? {
+            status: conectado ? "Conectado" : "Desconectado",
+            statusClass: conectado ? "dashboard-whatsapp-status-ok" : "dashboard-whatsapp-status-error",
+          }
+        : statusConfiguracao;
 
       setMonitoramentoWhatsapp({
         ...statusCalculado,
@@ -353,7 +394,9 @@ export function Dashboard() {
           (envio) => envio.status === "enviado" && dataEstaHoje(envio.enviado_em || envio.criado_em),
         ).length,
         falhasHoje: envios.filter((envio) => envio.status === "erro" && dataEstaHoje(envio.criado_em)).length,
-        ultimaAtualizacao: configBtzap?.atualizado_em ? formatarDataHora(configBtzap.atualizado_em) : "-",
+        ultimaAtualizacao: statusInstancia?.lastStatusAt || configBtzap?.ultimo_status_em
+          ? formatarDataHora(statusInstancia?.lastStatusAt ?? configBtzap?.ultimo_status_em)
+          : "-",
       });
     } catch (error) {
       console.error("Erro ao carregar monitoramento WhatsApp:", error);
@@ -439,15 +482,9 @@ export function Dashboard() {
 
   return (
     <main className="dashboard-page">
-      <header className="dashboard-header">
-        <div>
-          <h1>Dashboard</h1>
-          <p>Visão geral dos clientes, contas e campanhas</p>
-        </div>
-        <button className="secondary-button" type="button" onClick={carregarDashboard} disabled={carregando}>
-          Atualizar painel
-        </button>
-      </header>
+      <GlobalPageHeader title="Dashboard" subtitle="Visão geral dos clientes, contas e campanhas." icon="dashboard" actions={
+        <button className="secondary-button" type="button" onClick={carregarDashboard} disabled={carregando}>Atualizar painel</button>
+      } />
 
       {erro && <div className="state-box state-box-error">Erro ao carregar indicadores do dashboard.</div>}
 

@@ -1,11 +1,26 @@
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../../auth/AuthContext";
+import { GlobalHeaderIcon } from "./GlobalPageHeader";
 
 interface TopbarProps {
+  activePath: string;
+  onNavigate: (path: string) => void;
   onOpenMenu: () => void;
 }
 
-export function Topbar({ onOpenMenu }: TopbarProps) {
+const breadcrumbPorRota: Record<string, [string, string]> = {
+  "/dashboard": ["Início", "Dashboard"],
+  "/clientes": ["Operacional", "Clientes"],
+  "/contas-a-receber": ["Operacional", "Contas a Receber"],
+  "/automacoes": ["Operacional", "Automações"],
+  "/campanhas-promocao": ["Marketing", "Campanhas/Promoções"],
+  "/campanhas-promocao/modelos": ["Marketing", "Modelos"],
+  "/mensagens-programadas": ["Comunicação", "Mensagens Programadas"],
+  "/historico-envios": ["Sistema", "Histórico"],
+  "/configuracoes": ["Sistema", "Configurações"],
+};
+
+export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
   const { usuario, sair, alterarSenha } = useAuth();
   const [saindo, setSaindo] = useState(false);
   const [modalSenhaAberto, setModalSenhaAberto] = useState(false);
@@ -14,6 +29,7 @@ export function Topbar({ onOpenMenu }: TopbarProps) {
   const [confirmacaoSenha, setConfirmacaoSenha] = useState("");
   const [alterandoSenha, setAlterandoSenha] = useState(false);
   const [feedbackSenha, setFeedbackSenha] = useState<{ tipo: "sucesso" | "erro"; mensagem: string } | null>(null);
+  const [menuUsuarioAberto, setMenuUsuarioAberto] = useState(false);
   const nome = usuario?.nome || usuario?.usuario || "Usuário";
   const empresa = usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social || "Empresa";
   const iniciais = nome
@@ -25,6 +41,7 @@ export function Topbar({ onOpenMenu }: TopbarProps) {
   const ultimoAcesso = usuario?.ultimo_login_anterior
     ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(usuario.ultimo_login_anterior))
     : "Primeiro acesso";
+  const [, paginaAtual] = breadcrumbPorRota[activePath] ?? ["Início", "Dashboard"];
 
   async function handleLogout() {
     setSaindo(true);
@@ -77,29 +94,38 @@ export function Topbar({ onOpenMenu }: TopbarProps) {
 
   return (
     <>
-      <header className="topbar">
+      <header className="topbar page-global-header-top">
         <button className="mobile-menu-button" type="button" aria-label="Abrir menu" onClick={onOpenMenu}>
           <span />
           <span />
           <span />
         </button>
-        <span className="topbar-context">MegaByte Connect</span>
-        <div className="topbar-user">
-          <div className="topbar-user-copy">
-            <strong>{nome}</strong>
-            <span title={`Último acesso: ${ultimoAcesso}`}>{empresa}</span>
-            <span>{usuario?.cnpj}</span>
-          </div>
-          <div className="topbar-avatar" aria-label={`Usuário do sistema: ${nome}`}>
-            {iniciais || "MBC"}
-          </div>
-          <div className="topbar-user-actions">
-            <button className="topbar-password-button" type="button" onClick={() => setModalSenhaAberto(true)}>
-              Alterar senha
+        <div className="page-global-header-left">
+          <button className="page-global-icon-button page-global-home" type="button" aria-label="Ir para o Dashboard" onClick={() => onNavigate("/dashboard")}>
+            <GlobalHeaderIcon name="home" />
+          </button>
+          <nav className="page-global-breadcrumb" aria-label="Navegação estrutural">
+            <strong>{paginaAtual}</strong>
+          </nav>
+        </div>
+
+        <div className="page-global-header-actions">
+          <div className="page-global-user-menu">
+            <button className="page-global-user-card" type="button" onClick={() => setMenuUsuarioAberto((aberto) => !aberto)} aria-expanded={menuUsuarioAberto}>
+              <div className="page-global-avatar" aria-hidden="true">{iniciais.charAt(0) || "M"}<span /></div>
+              <div className="page-global-user-info">
+                <strong>{nome}</strong>
+                <small title={`Último acesso: ${ultimoAcesso}`}>{empresa}</small>
+                <small>CNPJ {usuario?.cnpj}</small>
+              </div>
+              <GlobalHeaderIcon name="down" />
             </button>
-            <button className="topbar-logout" type="button" onClick={() => void handleLogout()} disabled={saindo}>
-              {saindo ? "Saindo..." : "Sair"}
-            </button>
+            {menuUsuarioAberto && (
+              <div className="page-global-user-dropdown">
+                <button type="button" onClick={() => { setMenuUsuarioAberto(false); setModalSenhaAberto(true); }}>Alterar senha</button>
+                <button type="button" onClick={() => void handleLogout()} disabled={saindo}>{saindo ? "Saindo..." : "Sair"}</button>
+              </div>
+            )}
           </div>
         </div>
       </header>

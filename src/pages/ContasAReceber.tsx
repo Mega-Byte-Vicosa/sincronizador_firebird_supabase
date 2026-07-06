@@ -6,6 +6,7 @@ import { montarMensagemCobrancaWhatsapp } from "../utils/mensagemCobranca";
 import { useAuth } from "../auth/AuthContext";
 import type { ModeloMensagem } from "../types/modeloMensagem";
 import { aplicarVariaveisModelo, buscarModelosMensagem, getCategoriaModeloConta, montarVariaveisContaReceber, prepararCorpoModeloContaReceber } from "../utils/modelosMensagem";
+import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 
 type TipoConta = "Todos" | "N" | "C" | "D" | "E";
 type OutroFiltro = "Vencidas e vencendo hoje" | "Todos" | "Vencendo hoje" | "A vencer" | "Em carência" | "Vencidas" | "Recebidas";
@@ -1192,15 +1193,9 @@ export function ContasAReceber() {
 
   return (
     <main className="page-shell">
-      <header className="page-header">
-        <div>
-          <h1>Contas a Receber</h1>
-          <p>Gerencie e acompanhe suas contas a receber sincronizadas do Clipp.</p>
-        </div>
-        <button className="primary-button" type="button" onClick={carregarContas} disabled={carregando}>
-          Atualizar tela
-        </button>
-      </header>
+      <GlobalPageHeader title="Contas a Receber" subtitle="Gerencie e acompanhe suas contas a receber sincronizadas do Clipp." icon="receipt" actions={
+        <button className="primary-button" type="button" onClick={carregarContas} disabled={carregando}>Atualizar tela</button>
+      } />
 
       <section className="summary-grid" aria-label="Resumo de contas a receber">
         {cards.map((card) => (

@@ -4,6 +4,7 @@ import { MetricCardIcon } from "../components/layout/MetricCardIcon";
 import { supabase } from "../lib/supabaseClient";
 import type { ModeloMensagem } from "../types/modeloMensagem";
 import { buscarModelosMensagem } from "../utils/modelosMensagem";
+import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 
 type TipoComunicacao = "whatsapp" | "email" | "instagram";
 type StatusCampanha = "rascunho" | "programada" | "enviando" | "pausada" | "concluida" | "cancelada";
@@ -90,6 +91,7 @@ interface ContaCampanha {
   dt_baixa: string | null;
   vlr_ctarec: number | null;
   vlr_receb: number | null;
+  dias_carencia: number | null;
 }
 
 interface DestinatarioCampanha {
@@ -210,12 +212,14 @@ const tiposAutomacao = [
   { value: "contas_a_vencer_dias", label: "A vencer em dias" },
   { value: "contas_vencendo_hoje", label: "Vencendo hoje" },
   { value: "contas_vencidas_com_carencia", label: "Vencida com Carência" },
+  { value: "contas_vencidas", label: "Vencidas" },
 ] as const;
 
 const tiposAutomacaoCobranca = new Set([
   "contas_a_vencer_dias",
   "contas_vencendo_hoje",
   "contas_vencidas_com_carencia",
+  "contas_vencidas",
 ]);
 
 function normalizarTipoAutomacao(value: string | null | undefined) {
@@ -245,6 +249,7 @@ function labelRegraAutomacao(form: FormCampanha) {
   if (tipo === "clientes_sem_comprar_dias") return `Clientes sem comprar há ${form.automacaoDiasSemCompra || "X"} dias ou mais.`;
   if (tipo === "pos_compra_dias") return `Clientes cuja última compra ocorreu há ${form.automacaoDiasPosCompra || "X"} dias.`;
   if (tipo === "contas_vencidas_com_carencia") return `Contas vencidas em aberto dentro de ${form.automacaoDiasCarencia || "X"} dias de carência.`;
+  if (tipo === "contas_vencidas") return "Contas vencidas em aberto após o período de carência.";
   return labelTipoAutomacao(form.tipoAutomacao);
 }
 
@@ -442,6 +447,12 @@ function contaAtendeTipoAutomacao(
     const limite = new Date(vencimento);
     limite.setDate(limite.getDate() + carencia);
     return limite >= hoje;
+  }
+  if (tipo === "contas_vencidas") {
+    if (vencimento >= hoje) return false;
+    const limite = new Date(vencimento);
+    limite.setDate(limite.getDate() + Math.max(0, Number(conta.dias_carencia ?? 0)));
+    return limite < hoje;
   }
   return false;
 }
@@ -754,6 +765,25 @@ export function CampanhasPromocao() {
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatusCampanha>("padrao");
   const [filtrosLista, setFiltrosLista] = useState<FiltrosListaCampanhas>(filtrosListaCampanhasIniciais);
 
+  const gruposModelosAtivos = useMemo(() => {
+    const grupos = new Map<string, ModeloMensagemAtivo[]>();
+
+    modelosAtivos.forEach((modelo) => {
+      const separador = modelo.modelo_msg_titulo.match(/\s+[-–—]\s+/);
+      const categoria = separador
+        ? modelo.modelo_msg_titulo.slice(0, separador.index).trim()
+        : "Outros";
+      const modelosDaCategoria = grupos.get(categoria) ?? [];
+
+      modelosDaCategoria.push(modelo);
+      grupos.set(categoria, modelosDaCategoria);
+    });
+
+    return Array.from(grupos.entries()).sort(([categoriaA], [categoriaB]) =>
+      categoriaA.localeCompare(categoriaB, "pt-BR"),
+    );
+  }, [modelosAtivos]);
+
   const carregarModelosAtivos = useCallback(async () => {
     if (!usuario?.id_empresa) {
       setModelosAtivos([]);
@@ -804,7 +834,7 @@ export function CampanhasPromocao() {
         .order("nome", { ascending: true }),
       supabase
         .from("firebird_contas_receber")
-        .select("id_ctarec, id_empresa, id_cliente, documento, cliente_nome, cliente_telefone, dt_vencto, dt_baixa, vlr_ctarec, vlr_receb")
+        .select("id_ctarec, id_empresa, id_cliente, documento, cliente_nome, cliente_telefone, dt_vencto, dt_baixa, vlr_ctarec, vlr_receb, dias_carencia")
         .eq("id_empresa", usuario.id_empresa),
       supabase
         .from("tab_campanha_clientes")
@@ -1432,20 +1462,16 @@ export function CampanhasPromocao() {
 
   return (
     <main className="page-shell campaigns-page">
-      <header className="page-header">
-        <div>
-          <h1>Campanhas/Promoções</h1>
-          <p>Crie, programe e acompanhe campanhas para seus clientes.</p>
-        </div>
-        <div className="header-actions">
+      <GlobalPageHeader title="Campanhas/Promoções" subtitle="Crie, programe e acompanhe campanhas para seus clientes." icon="megaphone" actions={
+        <>
           <button className="secondary-button" type="button" onClick={carregarDados} disabled={carregando}>
             Atualizar
           </button>
           <button className="primary-button" type="button" onClick={abrirNovaCampanha}>
             Nova campanha
           </button>
-        </div>
-      </header>
+        </>
+      } />
 
       <section className="summary-grid campaigns-card-grid" aria-label="Resumo de campanhas">
         {cards.map((card) => {
@@ -2045,11 +2071,13 @@ export function CampanhasPromocao() {
                     <span>Selecionar modelo de mensagem</span>
                     <select value={modeloSelecionado} onChange={(event) => aplicarModeloMensagem(event.target.value)}>
                       <option value="">Nenhum modelo</option>
-                      <optgroup label="Modelos gerais">
-                        {modelosAtivos.map((modelo) => (
-                          <option value={modelo.id} key={modelo.id}>[{modelo.modelo_global ? "Global" : "Empresa"}] {modelo.modelo_msg_titulo}</option>
-                        ))}
-                      </optgroup>
+                      {gruposModelosAtivos.map(([categoria, modelos]) => (
+                        <optgroup label={categoria} key={categoria}>
+                          {modelos.map((modelo) => (
+                            <option value={modelo.id} key={modelo.id}>[{modelo.modelo_global ? "Global" : "Empresa"}] {modelo.modelo_msg_titulo}</option>
+                          ))}
+                        </optgroup>
+                      ))}
                       <optgroup label="Cobrança — A vencer">
                         {modelosCobranca.filter((modelo) => modelo.categoria === "contas_receber_a_vencer").map((modelo) => <option value={`cobranca:${modelo.id}`} key={modelo.id}>{modelo.nome}</option>)}
                       </optgroup>

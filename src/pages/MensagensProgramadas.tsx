@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 import type {
   MensagemProgramada,
   OrigemModuloMensagemProgramada,
@@ -775,12 +776,8 @@ export function MensagensProgramadas() {
 
   return (
     <main className="page-shell scheduled-page">
-      <header className="page-header">
-        <div>
-          <h1>Mensagens Programadas</h1>
-          <p>Controle central de agendamentos automáticos de mensagens.</p>
-        </div>
-        <div className="header-actions">
+      <GlobalPageHeader title="Mensagens Programadas" subtitle="Controle central de agendamentos automáticos de mensagens." icon="calendar" actions={
+        <>
           <button className="secondary-button" type="button" onClick={listarMensagensProgramadas} disabled={carregando}>
             Atualizar
           </button>
@@ -795,8 +792,8 @@ export function MensagensProgramadas() {
           <button className="primary-button" type="button" onClick={abrirNovoCadastro}>
             Nova mensagem
           </button>
-        </div>
-      </header>
+        </>
+      } />
 
       <section className="summary-grid scheduled-summary-grid" aria-label="Resumo de mensagens programadas">
         {cards.map((card) => {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNo
 import { useAuth } from "../auth/AuthContext";
 import { MetricCardIcon } from "../components/layout/MetricCardIcon";
 import { supabase } from "../lib/supabaseClient";
+import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 
 interface ModeloMensagem {
   id: string;
@@ -276,12 +277,8 @@ export function ModelosMensagem() {
 
   return (
     <main className="page-shell models-page">
-      <header className="page-header models-page-header">
-        <div>
-          <h1>Modelos de mensagens</h1>
-          <p>Cadastre modelos de mensagens para usar nas campanhas de WhatsApp.</p>
-        </div>
-        <div className="models-header-actions">
+      <GlobalPageHeader title="Modelos de mensagens" subtitle="Cadastre modelos de mensagens para usar nas campanhas de WhatsApp." icon="message" actions={
+        <>
           <button className="secondary-button" type="button" onClick={() => void carregarModelos()} disabled={carregando}>
             <ModelIcon name="refresh" />
             Atualizar
@@ -290,8 +287,8 @@ export function ModelosMensagem() {
             <ModelIcon name="plus" />
             Novo modelo
           </button>
-        </div>
-      </header>
+        </>
+      } />
 
       <section className="summary-grid models-summary-grid" aria-label="Resumo dos modelos">
         <article className="summary-card summary-card-azul">

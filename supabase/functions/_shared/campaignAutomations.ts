@@ -52,6 +52,7 @@ interface ContaAutomacao {
   dt_baixa: string | null;
   vlr_ctarec: number | null;
   vlr_receb: number | null;
+  dias_carencia: number | null;
 }
 
 interface DataCivil { ano: number; mes: number; dia: number }
@@ -104,7 +105,7 @@ function clienteAtendeRegra(cliente: ClienteAutomacao, campanha: CampanhaAutomat
   return false;
 }
 
-const TIPOS_COBRANCA = new Set(["contas_a_vencer_dias", "contas_vencendo_hoje", "contas_vencidas_com_carencia"]);
+const TIPOS_COBRANCA = new Set(["contas_a_vencer_dias", "contas_vencendo_hoje", "contas_vencidas_com_carencia", "contas_vencidas"]);
 
 function isAutomacaoCobranca(tipo: string) {
   return TIPOS_COBRANCA.has(tipo);
@@ -126,6 +127,10 @@ function contaAtendeRegra(conta: ContaAutomacao, campanha: CampanhaAutomatizada,
   if (campanha.tipo_automacao === "contas_vencidas_com_carencia") {
     const dias = Number(campanha.automacao_dias_carencia ?? 0);
     return dias >= 1 && compararDatas(vencimento, hoje) < 0 && compararDatas(deslocarDias(vencimento, dias), hoje) >= 0;
+  }
+  if (campanha.tipo_automacao === "contas_vencidas") {
+    const diasCarencia = Math.max(0, Number(conta.dias_carencia ?? 0));
+    return compararDatas(vencimento, hoje) < 0 && compararDatas(deslocarDias(vencimento, diasCarencia), hoje) < 0;
   }
   return false;
 }
@@ -341,7 +346,7 @@ export async function processarCampanhasAutomatizadas(
       try {
         const [contasResult, clientesResult] = await Promise.all([
           supabase.from("firebird_contas_receber")
-            .select("id_ctarec, id_cliente, documento, historico, cliente_nome, cliente_telefone, vendedor_nome, dt_emissao, dt_vencto, dt_baixa, vlr_ctarec, vlr_receb")
+            .select("id_ctarec, id_cliente, documento, historico, cliente_nome, cliente_telefone, vendedor_nome, dt_emissao, dt_vencto, dt_baixa, vlr_ctarec, vlr_receb, dias_carencia")
             .eq("id_empresa", campanha.id_empresa),
           supabase.from("tab_cliente")
             .select("id_cliente, permite_campanha, contato_restrito")

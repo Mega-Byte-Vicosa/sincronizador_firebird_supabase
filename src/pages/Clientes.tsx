@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabaseClient";
+import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 
 type FiltroSituacao =
   | "todos"
@@ -446,15 +447,9 @@ export function Clientes() {
 
   return (
     <main className="clients-page">
-      <header className="dashboard-header">
-        <div>
-          <h1>Clientes</h1>
-          <p>Clientes sincronizados da base local Firebird.</p>
-        </div>
-        <button className="secondary-button" type="button" onClick={carregarClientes} disabled={carregando}>
-          Atualizar
-        </button>
-      </header>
+      <GlobalPageHeader title="Clientes" subtitle="Clientes sincronizados da base local Firebird." icon="users" actions={
+        <button className="secondary-button" type="button" onClick={carregarClientes} disabled={carregando}>Atualizar</button>
+      } />
 
       <section className="clients-summary-grid" aria-label="Resumo de clientes">
         {resumoClientes.map((card) => (

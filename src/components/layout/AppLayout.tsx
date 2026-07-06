@@ -39,7 +39,7 @@ export function AppLayout({ activePath, children, onNavigate }: AppLayoutProps) 
         />
       )}
       <div className="app-workspace">
-        <Topbar onOpenMenu={() => setMobileMenuOpen(true)} />
+        <Topbar activePath={activePath} onNavigate={navigate} onOpenMenu={() => setMobileMenuOpen(true)} />
         <main className="app-content">{children}</main>
       </div>
     </div>
