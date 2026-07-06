@@ -25,6 +25,7 @@ interface ModeloForm {
   mensagem: string;
   ativo: boolean;
   modeloGlobal: boolean;
+  origem: "geral" | "cobranca";
 }
 
 const modeloFormInicial: ModeloForm = {
@@ -33,6 +34,7 @@ const modeloFormInicial: ModeloForm = {
   mensagem: "",
   ativo: true,
   modeloGlobal: false,
+  origem: "geral",
 };
 
 function normalizarBusca(value: unknown) {
@@ -169,6 +171,7 @@ export function ModelosMensagem() {
       mensagem: modelo.modelo_msg,
       ativo: modelo.ativo,
       modeloGlobal: modelo.modelo_global,
+      origem: modelo.origem,
     });
     setErro(null);
     setFeedback(null);
@@ -193,7 +196,7 @@ export function ModelosMensagem() {
     setSalvando(true);
     setErro(null);
 
-    const payload = {
+    const payloadGeral = {
       modelo_msg_titulo: titulo,
       modelo_msg: mensagem,
       ativo: form.ativo,
@@ -201,19 +204,25 @@ export function ModelosMensagem() {
     };
 
     const query = form.id
-      ? form.modeloGlobal
+      ? form.origem === "cobranca"
+        ? supabase
+            .from("tab_modelos_mensagem")
+            .update({ nome: titulo, corpo: mensagem, ativo: form.ativo })
+            .eq("id", form.id)
+            .eq("id_empresa", usuario.id_empresa)
+        : form.modeloGlobal
         ? supabase
             .from("tab_modelos_msg")
-            .update(payload)
+            .update(payloadGeral)
             .eq("id", form.id)
             .eq("modelo_global", true)
         : supabase
             .from("tab_modelos_msg")
-            .update(payload)
+            .update(payloadGeral)
             .eq("id", form.id)
             .eq("id_empresa", usuario.id_empresa)
       : supabase.from("tab_modelos_msg").insert({
-          ...payload,
+          ...payloadGeral,
           id_empresa: usuario.id_empresa,
           modelo_global: false,
           modelo_sistema: false,
@@ -238,13 +247,23 @@ export function ModelosMensagem() {
     setErro(null);
     setFeedback(null);
 
-    const updateQuery = supabase
-      .from("tab_modelos_msg")
-      .update({ ativo: !modelo.ativo, atualizado_por: usuario.id })
-      .eq("id", modelo.id);
-    const { error } = modelo.modelo_global
-      ? await updateQuery.eq("modelo_global", true)
-      : await updateQuery.eq("id_empresa", usuario.id_empresa);
+    const { error } = modelo.origem === "cobranca"
+      ? await supabase
+          .from("tab_modelos_mensagem")
+          .update({ ativo: !modelo.ativo })
+          .eq("id", modelo.id)
+          .eq("id_empresa", usuario.id_empresa)
+      : modelo.modelo_global
+        ? await supabase
+            .from("tab_modelos_msg")
+            .update({ ativo: !modelo.ativo, atualizado_por: usuario.id })
+            .eq("id", modelo.id)
+            .eq("modelo_global", true)
+        : await supabase
+            .from("tab_modelos_msg")
+            .update({ ativo: !modelo.ativo, atualizado_por: usuario.id })
+            .eq("id", modelo.id)
+            .eq("id_empresa", usuario.id_empresa);
 
     if (error) {
       setErro("Não foi possível alterar o status do modelo.");
@@ -335,8 +354,8 @@ export function ModelosMensagem() {
                   <td>
                     <div className="models-row-actions">
                       <button type="button" onClick={() => setVisualizando(modelo)} title="Visualizar" aria-label={`Visualizar ${modelo.modelo_msg_titulo}`}><ModelIcon name="view" /></button>
-                      {modelo.origem === "geral" && <button type="button" onClick={() => abrirEdicao(modelo)} title="Editar" aria-label={`Editar ${modelo.modelo_msg_titulo}`}><ModelIcon name="edit" /></button>}
-                      {modelo.origem === "geral" && <button type="button" onClick={() => void alternarStatus(modelo)} title={modelo.ativo ? "Inativar" : "Ativar"} aria-label={`${modelo.ativo ? "Inativar" : "Ativar"} ${modelo.modelo_msg_titulo}`}><ModelIcon name="toggle" /></button>}
+                      <button type="button" onClick={() => abrirEdicao(modelo)} title="Editar" aria-label={`Editar ${modelo.modelo_msg_titulo}`}><ModelIcon name="edit" /></button>
+                      <button type="button" onClick={() => void alternarStatus(modelo)} title={modelo.ativo ? "Inativar" : "Ativar"} aria-label={`${modelo.ativo ? "Inativar" : "Ativar"} ${modelo.modelo_msg_titulo}`}><ModelIcon name="toggle" /></button>
                     </div>
                   </td>
                 </tr>
@@ -354,8 +373,8 @@ export function ModelosMensagem() {
               <small>Criado em {formatarDataHora(modelo.criado_em)}</small>
               <div className="models-row-actions">
                 <button type="button" onClick={() => setVisualizando(modelo)} title="Visualizar"><ModelIcon name="view" /><span>Visualizar</span></button>
-                {modelo.origem === "geral" && <button type="button" onClick={() => abrirEdicao(modelo)} title="Editar"><ModelIcon name="edit" /><span>Editar</span></button>}
-                {modelo.origem === "geral" && <button type="button" onClick={() => void alternarStatus(modelo)} title={modelo.ativo ? "Inativar" : "Ativar"}><ModelIcon name="toggle" /><span>{modelo.ativo ? "Inativar" : "Ativar"}</span></button>}
+                <button type="button" onClick={() => abrirEdicao(modelo)} title="Editar"><ModelIcon name="edit" /><span>Editar</span></button>
+                <button type="button" onClick={() => void alternarStatus(modelo)} title={modelo.ativo ? "Inativar" : "Ativar"}><ModelIcon name="toggle" /><span>{modelo.ativo ? "Inativar" : "Ativar"}</span></button>
               </div>
             </article>
           ))}
@@ -391,7 +410,7 @@ export function ModelosMensagem() {
           <aside className="models-view-modal" role="dialog" aria-modal="true" aria-labelledby="models-view-title" onClick={(event) => event.stopPropagation()}>
             <header><div><h2 id="models-view-title">{visualizando.modelo_msg_titulo}</h2><span className={`models-status-badge ${visualizando.ativo ? "models-status-active" : "models-status-inactive"}`}>{visualizando.ativo ? "Ativo" : "Inativo"}</span></div><button type="button" onClick={() => setVisualizando(null)} aria-label="Fechar"><ModelIcon name="close" /></button></header>
             <p>{visualizando.modelo_msg}</p>
-            {visualizando.origem === "geral" && <footer><button className="primary-button" type="button" onClick={() => { setVisualizando(null); abrirEdicao(visualizando); }}><ModelIcon name="edit" />Editar modelo</button></footer>}
+            <footer><button className="primary-button" type="button" onClick={() => { setVisualizando(null); abrirEdicao(visualizando); }}><ModelIcon name="edit" />Editar modelo</button></footer>
           </aside>
         </div>
       )}
