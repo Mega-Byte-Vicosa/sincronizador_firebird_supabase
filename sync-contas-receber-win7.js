@@ -128,6 +128,73 @@ function converterTexto(valor) {
   return String(valor).trim();
 }
 
+function obterCampo(row, nome) {
+  if (!row || !nome) return undefined;
+  if (Object.prototype.hasOwnProperty.call(row, nome)) return row[nome];
+
+  var minusculo = String(nome).toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(row, minusculo)) return row[minusculo];
+
+  var maiusculo = String(nome).toUpperCase();
+  if (Object.prototype.hasOwnProperty.call(row, maiusculo)) return row[maiusculo];
+
+  return undefined;
+}
+
+function converterNumeroParametro(valor) {
+  if (valor === null || valor === undefined) return 0;
+  if (typeof valor === 'number') return Number.isFinite(valor) ? valor : 0;
+
+  var textoConvertido = converterTexto(valor);
+  var texto = textoConvertido ? String(textoConvertido).trim().replace(',', '.') : '';
+  if (!texto) return 0;
+
+  var numero = Number(texto);
+  return Number.isFinite(numero) ? numero : 0;
+}
+
+function converterInteiroParametro(valor) {
+  var inteiro = Math.trunc(converterNumeroParametro(valor));
+  return Number.isFinite(inteiro) && inteiro >= 0 ? inteiro : 0;
+}
+
+function normalizarTextoParametro(valor, padrao) {
+  var texto = converterTexto(valor);
+  return texto || padrao;
+}
+
+async function buscarParametrosFinanceirosFirebird(db) {
+  var parametros = { perc_multa: 0, tipo_juros: 'S', perc_juros: 0, dias_carencia: 0 };
+
+  try {
+    var sql = [
+      'SELECT INFORMACAO, CONTEUDO',
+      'FROM TB_PARAMETRO',
+      "WHERE UPPER(TRIM(INFORMACAO)) IN ('PERC_MULTA', 'TIPO_JUROS', 'PERC_JUROS', 'DIAS_CARENCIA')"
+    ].join(' ');
+    var rows = await consultarFirebird(db, sql);
+    console.log('[PARAMETROS FINANCEIROS] Linhas encontradas na TB_PARAMETRO:', rows.length);
+
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      console.log('[PARAMETROS FINANCEIROS] Linha Firebird:', row);
+      var informacao = normalizarTextoParametro(obterCampo(row, 'INFORMACAO'), '').toUpperCase();
+      var conteudo = obterCampo(row, 'CONTEUDO');
+
+      if (informacao === 'PERC_MULTA') parametros.perc_multa = converterNumeroParametro(conteudo);
+      if (informacao === 'TIPO_JUROS') parametros.tipo_juros = normalizarTextoParametro(conteudo, 'S').toUpperCase();
+      if (informacao === 'PERC_JUROS') parametros.perc_juros = converterNumeroParametro(conteudo);
+      if (informacao === 'DIAS_CARENCIA') parametros.dias_carencia = converterInteiroParametro(conteudo);
+    }
+
+    console.log('[PARAMETROS FINANCEIROS] Parametros finais usados na sincronizacao:', parametros);
+  } catch (erro) {
+    console.warn('[PARAMETROS FINANCEIROS] Nao foi possivel buscar TB_PARAMETRO. Usando padroes seguros.', erro.message || erro);
+  }
+
+  return parametros;
+}
+
 function limparCnpj(valor) {
   return String(valor || '').replace(/\D/g, '');
 }
@@ -375,7 +442,11 @@ function montarTelefoneVendedor(row) {
   return null;
 }
 
-function montarRegistroContaReceber(row, idEmpresa) {
+function montarRegistroContaReceber(row, idEmpresa, parametrosFinanceiros) {
+  if (!parametrosFinanceiros) {
+    parametrosFinanceiros = { perc_multa: 0, tipo_juros: 'S', perc_juros: 0, dias_carencia: 0 };
+  }
+
   return {
     id_empresa: idEmpresa,
     id_ctarec: row.id_ctarec,
@@ -385,6 +456,10 @@ function montarRegistroContaReceber(row, idEmpresa) {
     dt_vencto: converterData(row.dt_vencto),
     vlr_ctarec: row.vlr_ctarec,
     tip_ctarec: converterTexto(row.tip_ctarec),
+    perc_multa: parametrosFinanceiros.perc_multa,
+    tipo_juros: parametrosFinanceiros.tipo_juros,
+    perc_juros: parametrosFinanceiros.perc_juros,
+    dias_carencia: parametrosFinanceiros.dias_carencia,
 
     id_portador: row.id_portador,
     id_cliente: row.id_cliente,
@@ -884,12 +959,15 @@ async function sincronizarContasReceber(db, idEmpresa, modoSincronizacao) {
   console.log('----------------------------------------');
 
   const resultado = await consultarContasReceberComFallback(db, modoSincronizacao);
+  const parametrosFinanceiros = await buscarParametrosFinanceirosFirebird(db);
 
   console.log('Contas a receber encontradas no Firebird: ' + resultado.length);
 
   const registros = resultado.map(function(row) {
-    return montarRegistroContaReceber(row, idEmpresa);
+    return montarRegistroContaReceber(row, idEmpresa, parametrosFinanceiros);
   });
+
+  console.log('[PARAMETROS FINANCEIROS] Enviando contas com parametros:', parametrosFinanceiros);
 
   if (registros.length > 0) {
     console.log('Primeira conta a receber montada para envio:');

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormE
 import { useAuth } from "../auth/AuthContext";
 import { MetricCardIcon } from "../components/layout/MetricCardIcon";
 import { supabase } from "../lib/supabaseClient";
+import type { ModeloMensagem } from "../types/modeloMensagem";
+import { buscarModelosMensagem } from "../utils/modelosMensagem";
 
 type TipoComunicacao = "whatsapp" | "email" | "instagram";
 type StatusCampanha = "rascunho" | "programada" | "enviando" | "pausada" | "concluida" | "cancelada";
@@ -747,6 +749,7 @@ export function CampanhasPromocao() {
   const [form, setForm] = useState<FormCampanha>(formInicial);
   const [selecionados, setSelecionados] = useState<Set<number>>(new Set());
   const [modelosAtivos, setModelosAtivos] = useState<ModeloMensagemAtivo[]>([]);
+  const [modelosCobranca, setModelosCobranca] = useState<ModeloMensagem[]>([]);
   const [modeloSelecionado, setModeloSelecionado] = useState("");
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatusCampanha>("padrao");
   const [filtrosLista, setFiltrosLista] = useState<FiltrosListaCampanhas>(filtrosListaCampanhasIniciais);
@@ -754,18 +757,25 @@ export function CampanhasPromocao() {
   const carregarModelosAtivos = useCallback(async () => {
     if (!usuario?.id_empresa) {
       setModelosAtivos([]);
+      setModelosCobranca([]);
       return;
     }
 
-    const { data, error } = await supabase
-      .from("tab_modelos_msg")
-      .select("id, modelo_msg_titulo, modelo_msg, modelo_global")
-      .eq("ativo", true)
-      .or(`modelo_global.eq.true,id_empresa.eq.${usuario.id_empresa}`)
-      .order("modelo_global", { ascending: false })
-      .order("modelo_msg_titulo", { ascending: true });
+    const [modelosGerais, cobranca] = await Promise.allSettled([
+      supabase
+        .from("tab_modelos_msg")
+        .select("id, modelo_msg_titulo, modelo_msg, modelo_global")
+        .eq("ativo", true)
+        .or(`modelo_global.eq.true,id_empresa.eq.${usuario.id_empresa}`)
+        .order("modelo_global", { ascending: false })
+        .order("modelo_msg_titulo", { ascending: true }),
+      buscarModelosMensagem(usuario.id_empresa),
+    ]);
 
-    setModelosAtivos(error ? [] : ((data ?? []) as ModeloMensagemAtivo[]));
+    if (modelosGerais.status === "fulfilled") {
+      setModelosAtivos(modelosGerais.value.error ? [] : ((modelosGerais.value.data ?? []) as ModeloMensagemAtivo[]));
+    } else setModelosAtivos([]);
+    setModelosCobranca(cobranca.status === "fulfilled" ? cobranca.value : []);
   }, [usuario?.id_empresa]);
 
   const carregarDados = useCallback(async () => {
@@ -1152,15 +1162,18 @@ export function CampanhasPromocao() {
       return;
     }
 
+    const modeloCobranca = idModelo.startsWith("cobranca:")
+      ? modelosCobranca.find((item) => item.id === idModelo.slice("cobranca:".length))
+      : null;
     const modelo = modelosAtivos.find((item) => item.id === idModelo);
-    if (!modelo) return;
+    if (!modelo && !modeloCobranca) return;
 
     if (form.mensagem.trim() && !window.confirm("Deseja substituir a mensagem atual pelo modelo selecionado?")) {
       return;
     }
 
     setModeloSelecionado(idModelo);
-    setForm({ ...form, mensagem: modelo.modelo_msg });
+    setForm({ ...form, mensagem: modeloCobranca?.corpo ?? modelo?.modelo_msg ?? form.mensagem });
   }
 
   function validarFormulario(status: StatusCampanha) {
@@ -1231,7 +1244,9 @@ export function CampanhasPromocao() {
       },
       tags_publico: form.tagsPublico,
       mensagem: form.mensagem.trim(),
-      id_modelo_mensagem: modeloSelecionado || null,
+      id_modelo_mensagem: modeloSelecionado.startsWith("cobranca:")
+        ? modeloSelecionado.slice("cobranca:".length)
+        : modeloSelecionado || null,
       tipo_comunicacao: form.tipoComunicacao,
       status,
       automatizada: form.automatizada,
@@ -1550,7 +1565,7 @@ export function CampanhasPromocao() {
                     <td>{tipoLabel(campanha.tipo_comunicacao)}</td>
                     <td>
                       <span className={statusClass(campanha.status)}>{statusLabels[campanha.status]}</span>
-                      {campanha.status === "programada" && !filasPorCampanha[campanha.id] && (
+                      {campanha.status === "programada" && !campanha.automatizada && !filasPorCampanha[campanha.id] && (
                         <span className="campaign-queue-warning">Sem fila de envio</span>
                       )}
                     </td>
@@ -2030,13 +2045,22 @@ export function CampanhasPromocao() {
                     <span>Selecionar modelo de mensagem</span>
                     <select value={modeloSelecionado} onChange={(event) => aplicarModeloMensagem(event.target.value)}>
                       <option value="">Nenhum modelo</option>
-                      {modelosAtivos.map((modelo) => (
-                        <option value={modelo.id} key={modelo.id}>
-                          [{modelo.modelo_global ? "Global" : "Empresa"}] {modelo.modelo_msg_titulo}
-                        </option>
-                      ))}
+                      <optgroup label="Modelos gerais">
+                        {modelosAtivos.map((modelo) => (
+                          <option value={modelo.id} key={modelo.id}>[{modelo.modelo_global ? "Global" : "Empresa"}] {modelo.modelo_msg_titulo}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Cobrança — A vencer">
+                        {modelosCobranca.filter((modelo) => modelo.categoria === "contas_receber_a_vencer").map((modelo) => <option value={`cobranca:${modelo.id}`} key={modelo.id}>{modelo.nome}</option>)}
+                      </optgroup>
+                      <optgroup label="Cobrança — Em Carência">
+                        {modelosCobranca.filter((modelo) => modelo.categoria === "contas_receber_carencia").map((modelo) => <option value={`cobranca:${modelo.id}`} key={modelo.id}>{modelo.nome}</option>)}
+                      </optgroup>
+                      <optgroup label="Cobrança — Vencidas">
+                        {modelosCobranca.filter((modelo) => modelo.categoria === "contas_receber_vencida").map((modelo) => <option value={`cobranca:${modelo.id}`} key={modelo.id}>{modelo.nome}</option>)}
+                      </optgroup>
                     </select>
-                    {modelosAtivos.length === 0 && (
+                    {modelosAtivos.length === 0 && modelosCobranca.length === 0 && (
                       <small>Nenhum modelo cadastrado. Cadastre modelos em Campanhas/Promoções &gt; Modelos.</small>
                     )}
                   </label>
@@ -2053,6 +2077,9 @@ export function CampanhasPromocao() {
                   <p className="field-help campaign-full-field">
                     A mensagem continuará editável. Variáveis disponíveis: {"{{nome}}"}, {"{{cliente}}"}, {"{{empresa}}"}, {"{{documento}}"}, {"{{vencimento}}"}, {"{{valor}}"}, {"{{data_atual}}"}, {"{{ultima_compra}}"} e {"{{primeira_compra}}"}.
                   </p>
+                  {modeloSelecionado.startsWith("cobranca:") && !isAutomacaoCobranca(form.tipoAutomacao) && (
+                    <p className="field-help campaign-full-field">Variáveis de conta, como valor atual, vencimento e fim da carência, só são preenchidas quando a campanha possui uma conta a receber vinculada.</p>
+                  )}
                   <label className="campaign-upload-field">
                     <span>Arquivo ou imagem</span>
                     <input type="file" onChange={selecionarArquivo} disabled={salvando} />

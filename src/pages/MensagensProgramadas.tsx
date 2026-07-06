@@ -11,6 +11,8 @@ import type { ContaReceber } from "../types/contasReceber";
 import { MetricCardIcon } from "../components/layout/MetricCardIcon";
 import { montarMensagemCobrancaWhatsapp } from "../utils/mensagemCobranca";
 import { useAuth } from "../auth/AuthContext";
+import type { ModeloMensagem } from "../types/modeloMensagem";
+import { aplicarVariaveisModelo, buscarModelosMensagem, getCategoriaModeloConta, montarVariaveisContaReceber } from "../utils/modelosMensagem";
 
 interface FiltrosMensagensProgramadas {
   busca: string;
@@ -1547,6 +1549,33 @@ export function ProgramarMensagemContaReceberModal({
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [exibirDatasProgramadas, setExibirDatasProgramadas] = useState(false);
+  const [modelos, setModelos] = useState<ModeloMensagem[]>([]);
+  const [modeloSelecionado, setModeloSelecionado] = useState("");
+  const [carregandoModelos, setCarregandoModelos] = useState(true);
+
+  useEffect(() => {
+    let ativo = true;
+    const categoria = getCategoriaModeloConta(conta);
+    if (!usuario?.id_empresa || !categoria) {
+      setCarregandoModelos(false);
+      return () => { ativo = false; };
+    }
+    void buscarModelosMensagem(usuario.id_empresa, categoria)
+      .then((dados) => { if (ativo) setModelos(dados); })
+      .catch((error) => { if (ativo) setErro(error instanceof Error ? error.message : "Não foi possível carregar os modelos."); })
+      .finally(() => { if (ativo) setCarregandoModelos(false); });
+    return () => { ativo = false; };
+  }, [conta, usuario?.id_empresa]);
+
+  function selecionarModelo(idModelo: string) {
+    setModeloSelecionado(idModelo);
+    const modelo = modelos.find((item) => item.id === idModelo);
+    if (!modelo) return;
+    const mensagem = aplicarVariaveisModelo(modelo.corpo, montarVariaveisContaReceber(conta, {
+      nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
+    }));
+    setForm({ ...form, mensagem });
+  }
 
   async function salvarMensagemProgramadaContaReceber() {
     const erroValidacao = validarMensagemProgramada(form);
@@ -1748,6 +1777,15 @@ export function ProgramarMensagemContaReceberModal({
                   onChange={(event) => setForm({ ...form, destinatario_telefone: event.target.value })}
                   disabled={salvando}
                 />
+              </label>
+
+              <label className="scheduled-full-field">
+                <span>Modelo de cobrança</span>
+                <select value={modeloSelecionado} onChange={(event) => selecionarModelo(event.target.value)} disabled={salvando || carregandoModelos}>
+                  <option value="">{carregandoModelos ? "Carregando modelos..." : "Mensagem padrão atual"}</option>
+                  {modelos.map((modelo) => <option key={modelo.id} value={modelo.id}>{modelo.nome}</option>)}
+                </select>
+                <small>Selecionar um modelo apenas preenche o texto; você ainda pode editá-lo antes de programar.</small>
               </label>
 
               <label className="scheduled-full-field">

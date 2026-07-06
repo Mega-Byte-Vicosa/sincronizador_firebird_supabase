@@ -4,10 +4,12 @@ import type { ContaReceber } from "../types/contasReceber";
 import { ProgramarMensagemContaReceberModal } from "./MensagensProgramadas";
 import { montarMensagemCobrancaWhatsapp } from "../utils/mensagemCobranca";
 import { useAuth } from "../auth/AuthContext";
+import type { ModeloMensagem } from "../types/modeloMensagem";
+import { aplicarVariaveisModelo, buscarModelosMensagem, getCategoriaModeloConta, montarVariaveisContaReceber } from "../utils/modelosMensagem";
 
 type TipoConta = "Todos" | "N" | "C" | "D" | "E";
-type OutroFiltro = "Vencidas e vencendo hoje" | "Todos" | "Vencendo hoje" | "A vencer" | "Vencidas" | "Recebidas";
-type StatusConta = "recebida" | "vencendo_hoje" | "vencida" | "a_vencer";
+type OutroFiltro = "Vencidas e vencendo hoje" | "Todos" | "Vencendo hoje" | "A vencer" | "Em carência" | "Vencidas" | "Recebidas";
+type StatusConta = "recebida" | "vencendo_hoje" | "em_carencia" | "vencida" | "a_vencer";
 
 interface ResumoContas {
   contasListadas: number;
@@ -36,6 +38,9 @@ interface RevisaoWhatsapp {
   mensagem: string;
   erro: string | null;
   enviando: boolean;
+  modelos: ModeloMensagem[];
+  modeloSelecionado: string;
+  carregandoModelos: boolean;
 }
 
 type WhatsappReviewIconType = "message" | "user" | "phone" | "file" | "money" | "calendar" | "send" | "close";
@@ -408,7 +413,7 @@ function montarMensagemErroWhatsapp(data: unknown) {
   return texto || "Não foi possível enviar a mensagem WhatsApp.";
 }
 
-function hojeISO() {
+function hojeISO(): string {
   const hoje = new Date();
   const ano = hoje.getFullYear();
   const mes = String(hoje.getMonth() + 1).padStart(2, "0");
@@ -435,10 +440,50 @@ function getUltimoDiaMesAtual() {
   return formatarDataInput(new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0));
 }
 
-function normalizarData(data: string | null | undefined) {
-  if (!data) return null;
+function normalizarDataISO(valor: string | null | undefined): string | null {
+  if (!valor) return null;
+  const match = String(valor).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+}
 
-  return data.split("T")[0] || null;
+function normalizarData(data: string | null | undefined) {
+  return normalizarDataISO(data);
+}
+
+function parseISODateLocal(dataISO: string): Date {
+  const [ano, mes, dia] = dataISO.split("-").map(Number);
+  return new Date(ano, mes - 1, dia);
+}
+
+function formatISODateLocal(data: Date): string {
+  return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, "0")}-${String(data.getDate()).padStart(2, "0")}`;
+}
+
+function adicionarDiasISO(dataISO: string, dias: number): string {
+  const data = parseISODateLocal(dataISO);
+  data.setDate(data.getDate() + dias);
+  return formatISODateLocal(data);
+}
+
+function calcularDiferencaDias(dataInicialISO: string, dataFinalISO: string): number {
+  const inicio = parseISODateLocal(dataInicialISO);
+  const fim = parseISODateLocal(dataFinalISO);
+  return Math.floor((fim.getTime() - inicio.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function getDiasCarencia(conta: ContaReceber): number {
+  const valor = numeroSeguro(conta.dias_carencia);
+  return valor >= 0 ? Math.trunc(valor) : 0;
+}
+
+function numeroSeguro(valor: unknown): number {
+  const numero = Number(valor ?? 0);
+  return Number.isFinite(numero) ? numero : 0;
+}
+
+function getDataFinalCarenciaISO(conta: ContaReceber): string | null {
+  const vencimentoISO = normalizarDataISO(conta.dt_vencto);
+  return vencimentoISO ? adicionarDiasISO(vencimentoISO, getDiasCarencia(conta)) : null;
 }
 
 export function formatarMoeda(valor: number | null | undefined) {
@@ -484,23 +529,18 @@ function formatarHora(valor: string | null | undefined) {
 }
 
 export function calcularResumo(contas: ContaReceber[]): ResumoContas {
-  const hoje = hojeISO();
-
   return contas.reduce<ResumoContas>(
     (resumo, conta) => {
       const valor = Number(conta.vlr_ctarec ?? 0);
-      const vencimento = normalizarData(conta.dt_vencto);
-      const recebida = isRecebida(conta);
-      const vencida = !recebida && vencimento !== null && vencimento < hoje;
-      const aVencer = !recebida && vencimento !== null && vencimento >= hoje;
+      const status = getStatusConta(conta);
 
       resumo.contasListadas += 1;
       resumo.valorTotal += valor;
 
-      if (vencida) {
+      if (status === "vencida") {
         resumo.qtdVencidas += 1;
         resumo.valorVencido += valor;
-      } else if (aVencer) {
+      } else if (status === "a_vencer" || status === "vencendo_hoje" || status === "em_carencia") {
         resumo.qtdAVencer += 1;
         resumo.valorAVencer += valor;
       }
@@ -524,32 +564,28 @@ function normalizarBusca(valor: unknown) {
     .toLocaleLowerCase("pt-BR");
 }
 
-function isHoje(data: string | null | undefined) {
-  return normalizarData(data) === hojeISO();
-}
-
 function isRecebida(conta: ContaReceber) {
   return normalizarData(conta.dt_baixa) !== null || Number(conta.vlr_receb ?? 0) > 0;
 }
 
-function isVencida(conta: ContaReceber) {
-  const vencimento = normalizarData(conta.dt_vencto);
-
-  return !isRecebida(conta) && vencimento !== null && vencimento < hojeISO();
-}
-
-function isAVencer(conta: ContaReceber) {
-  const vencimento = normalizarData(conta.dt_vencto);
-
-  return !isRecebida(conta) && vencimento !== null && vencimento > hojeISO();
+function contaEstaRecebida(conta: ContaReceber): boolean {
+  return isRecebida(conta);
 }
 
 function getStatusConta(conta: ContaReceber): StatusConta {
-  if (isRecebida(conta)) return "recebida";
-  if (isHoje(conta.dt_vencto)) return "vencendo_hoje";
-  if (isVencida(conta)) return "vencida";
+  if (contaEstaRecebida(conta)) return "recebida";
+  const vencimentoISO = normalizarDataISO(conta.dt_vencto);
+  if (!vencimentoISO) return "a_vencer";
+  const hoje = hojeISO();
+  if (vencimentoISO === hoje) return "vencendo_hoje";
+  if (vencimentoISO > hoje) return "a_vencer";
+  const dataFinalCarenciaISO = getDataFinalCarenciaISO(conta);
+  if (dataFinalCarenciaISO && hoje <= dataFinalCarenciaISO) return "em_carencia";
+  return "vencida";
+}
 
-  return "a_vencer";
+function contaEstaVencidaForaDaCarencia(conta: ContaReceber): boolean {
+  return getStatusConta(conta) === "vencida";
 }
 
 function getStatusLabel(conta: ContaReceber) {
@@ -557,6 +593,7 @@ function getStatusLabel(conta: ContaReceber) {
 
   if (status === "recebida") return "Recebida";
   if (status === "vencendo_hoje") return "Vencendo hoje";
+  if (status === "em_carencia") return "Em carência";
   if (status === "vencida") return "Vencida";
 
   return "A vencer";
@@ -567,15 +604,52 @@ function getStatusClass(conta: ContaReceber) {
 }
 
 function atendeOutroFiltro(conta: ContaReceber, outroFiltro: OutroFiltro) {
+  const status = getStatusConta(conta);
   if (outroFiltro === "Vencidas e vencendo hoje") {
-    return !isRecebida(conta) && (isVencida(conta) || isHoje(conta.dt_vencto));
+    return status === "vencida" || status === "em_carencia" || status === "vencendo_hoje";
   }
   if (outroFiltro === "Todos") return true;
-  if (outroFiltro === "Recebidas") return isRecebida(conta);
-  if (outroFiltro === "Vencendo hoje") return !isRecebida(conta) && isHoje(conta.dt_vencto);
-  if (outroFiltro === "Vencidas") return isVencida(conta);
+  if (outroFiltro === "Recebidas") return status === "recebida";
+  if (outroFiltro === "Vencendo hoje") return status === "vencendo_hoje";
+  if (outroFiltro === "Em carência") return status === "em_carencia";
+  if (outroFiltro === "Vencidas") return status === "vencida";
+  return status === "a_vencer";
+}
 
-  return isAVencer(conta);
+function calcularValorAtual(conta: ContaReceber): number {
+  const valorOriginal = numeroSeguro(conta.vlr_ctarec);
+  if (!contaEstaVencidaForaDaCarencia(conta)) return valorOriginal;
+
+  const vencimentoISO = normalizarDataISO(conta.dt_vencto);
+  if (!vencimentoISO) return valorOriginal;
+  const diasJuros = calcularDiferencaDias(vencimentoISO, hojeISO());
+  if (diasJuros <= 0) return valorOriginal;
+
+  const percMulta = numeroSeguro(conta.perc_multa);
+  const percJuros = numeroSeguro(conta.perc_juros);
+  const tipoJuros = String(conta.tipo_juros ?? "S").trim().toUpperCase();
+  const multa = valorOriginal * (percMulta / 100);
+  const taxaJuros = percJuros / 100;
+
+  // A carência impede cobrança enquanto estiver vigente. Caso a conta ultrapasse a carência,
+  // multa e juros são calculados considerando a data original de vencimento.
+  const juros = tipoJuros === "C"
+    ? valorOriginal * (Math.pow(1 + taxaJuros, diasJuros) - 1)
+    : valorOriginal * taxaJuros * diasJuros;
+  return valorOriginal + multa + juros;
+}
+
+function deveMostrarValorAtual(conta: ContaReceber): boolean {
+  return getStatusConta(conta) === "vencida";
+}
+
+function formatarPercentualParametro(valor: number | null | undefined): string {
+  const numero = numeroSeguro(valor);
+  return `${numero.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 4 })}%`;
+}
+
+function formatarTipoJuros(valor: string | null | undefined): string {
+  return String(valor ?? "S").trim().toUpperCase() === "C" ? "Composto" : "Simples";
 }
 
 function formatarValorCampo(conta: ContaReceber, campo: keyof ContaReceber) {
@@ -781,7 +855,9 @@ function criarColunasTabela(
   },
   {
     titulo: "Valor",
-    render: (conta: ContaReceber) => formatarValorCampo(conta, "vlr_ctarec"),
+    render: (conta: ContaReceber) => (
+      <div>{formatarValorCampo(conta, "vlr_ctarec")}{deveMostrarValorAtual(conta) && <div className="receivable-current-value"><span>Valor Atual</span><strong>{formatarMoeda(calcularValorAtual(conta))}</strong></div>}</div>
+    ),
   },
   {
     titulo: "Data baixa",
@@ -955,7 +1031,7 @@ export function ContasAReceber() {
     });
   }
 
-  function abrirRevisaoWhatsapp(conta: ContaReceber, tipoEnvio: "envio" | "reenvio") {
+  async function abrirRevisaoWhatsapp(conta: ContaReceber, tipoEnvio: "envio" | "reenvio") {
     if (tipoEnvio === "reenvio" && !jaHouveEnvioWhatsapp(conta)) {
       setFeedbackWhatsapp("Essa conta ainda não teve o primeiro envio. Use Enviar WhatsApp.");
       return;
@@ -974,7 +1050,38 @@ export function ContasAReceber() {
       mensagem: montarMensagemCobrancaWhatsapp(conta),
       erro: null,
       enviando: false,
+      modelos: [],
+      modeloSelecionado: "",
+      carregandoModelos: true,
     });
+
+    const categoria = getCategoriaModeloConta(conta);
+    if (!categoria || !usuario?.id_empresa) {
+      setRevisaoWhatsapp((atual) => atual ? { ...atual, carregandoModelos: false } : atual);
+      return;
+    }
+
+    try {
+      const modelos = await buscarModelosMensagem(usuario.id_empresa, categoria);
+      setRevisaoWhatsapp((atual) => atual?.conta.id_ctarec === conta.id_ctarec
+        ? { ...atual, modelos, carregandoModelos: false }
+        : atual);
+    } catch (error) {
+      setRevisaoWhatsapp((atual) => atual?.conta.id_ctarec === conta.id_ctarec
+        ? { ...atual, carregandoModelos: false, erro: error instanceof Error ? error.message : "Não foi possível carregar os modelos." }
+        : atual);
+    }
+  }
+
+  function selecionarModeloWhatsapp(idModelo: string) {
+    if (!revisaoWhatsapp) return;
+    const modelo = revisaoWhatsapp.modelos.find((item) => item.id === idModelo);
+    const mensagem = modelo
+      ? aplicarVariaveisModelo(modelo.corpo, montarVariaveisContaReceber(revisaoWhatsapp.conta, {
+          nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
+        }))
+      : revisaoWhatsapp.mensagem;
+    setRevisaoWhatsapp({ ...revisaoWhatsapp, modeloSelecionado: idModelo, mensagem, erro: null });
   }
 
   function fecharRevisaoWhatsapp() {
@@ -1140,6 +1247,7 @@ export function ContasAReceber() {
             <option value="Todos">Todos</option>
             <option value="Vencendo hoje">Vencendo hoje</option>
             <option value="A vencer">A vencer</option>
+            <option value="Em carência">Em carência</option>
             <option value="Vencidas">Vencidas</option>
             <option value="Recebidas">Recebidas</option>
           </select>
@@ -1204,6 +1312,7 @@ export function ContasAReceber() {
                   <div className="receivable-amount">
                     <span>Valor</span>
                     <strong>{formatarValorCampo(conta, "vlr_ctarec")}</strong>
+                    {deveMostrarValorAtual(conta) && <div className="receivable-current-value"><span>Valor Atual</span><strong>{formatarMoeda(calcularValorAtual(conta))}</strong></div>}
                   </div>
                 </div>
 
@@ -1249,6 +1358,7 @@ export function ContasAReceber() {
                 </div>
                 <dl className="receivable-mobile-details">
                   <div><dt>Valor</dt><dd>{formatarValorCampo(conta, "vlr_ctarec")}</dd></div>
+                  {deveMostrarValorAtual(conta) && <div><dt>Valor Atual</dt><dd>{formatarMoeda(calcularValorAtual(conta))}</dd></div>}
                   <div><dt>Vencimento</dt><dd>{formatarValorCampo(conta, "dt_vencto")}</dd></div>
                   <div><dt>Telefone</dt><dd>{formatarValorCampo(conta, "cliente_telefone")}</dd></div>
                   <div><dt>Tipo</dt><dd>{formatarValorCampo(conta, "tip_ctarec")}</dd></div>
@@ -1331,6 +1441,11 @@ export function ContasAReceber() {
                     <dd>{formatarValorCampo(contaSelecionada, campo)}</dd>
                   </div>
                 ))}
+                <div><dt>Perc. multa</dt><dd>{formatarPercentualParametro(contaSelecionada.perc_multa)}</dd></div>
+                <div><dt>Tipo juros</dt><dd>{formatarTipoJuros(contaSelecionada.tipo_juros)}</dd></div>
+                <div><dt>Perc. juros</dt><dd>{formatarPercentualParametro(contaSelecionada.perc_juros)}</dd></div>
+                <div><dt>Dias carência</dt><dd>{getDiasCarencia(contaSelecionada)}</dd></div>
+                {deveMostrarValorAtual(contaSelecionada) && <div><dt>Valor atual</dt><dd>{formatarMoeda(calcularValorAtual(contaSelecionada))}</dd></div>}
               </dl>
             </section>
           </aside>
@@ -1377,6 +1492,18 @@ export function ContasAReceber() {
               </header>
 
               <div className="whatsapp-review-content">
+                <label className="whatsapp-review-message-card">
+                  <span>Modelo de cobrança</span>
+                  <select
+                    value={revisaoWhatsapp.modeloSelecionado}
+                    onChange={(event) => selecionarModeloWhatsapp(event.target.value)}
+                    disabled={revisaoWhatsapp.enviando || revisaoWhatsapp.carregandoModelos}
+                  >
+                    <option value="">{revisaoWhatsapp.carregandoModelos ? "Carregando modelos..." : "Mensagem padrão atual"}</option>
+                    {revisaoWhatsapp.modelos.map((modelo) => <option key={modelo.id} value={modelo.id}>{modelo.nome}</option>)}
+                  </select>
+                  <small>A mensagem preenchida pelo modelo continua editável antes do envio.</small>
+                </label>
                 <div className="whatsapp-review-grid">
                   <WhatsappReviewInfoCard icon="user" label="Cliente" value={revisaoWhatsapp.conta.cliente_nome ?? "-"} />
 

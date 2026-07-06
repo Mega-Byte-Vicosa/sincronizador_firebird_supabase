@@ -12,8 +12,11 @@ interface DashboardResumo {
   valorVencendoHoje: number;
   recebidas: number;
   vencidas: number;
+  emCarencia: number;
   aVencer: number;
 }
+
+type StatusContaDashboard = "recebida" | "vencendo_hoje" | "em_carencia" | "vencida" | "a_vencer";
 
 interface BtzapConfigDashboard {
   id: number;
@@ -104,7 +107,15 @@ function hojeISO() {
 
 function normalizarData(data: string | null | undefined) {
   if (!data) return null;
-  return data.split("T")[0] || null;
+  const match = String(data).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+}
+
+function adicionarDiasISO(dataISO: string, dias: number) {
+  const [ano, mes, dia] = dataISO.split("-").map(Number);
+  const data = new Date(ano, mes - 1, dia);
+  data.setDate(data.getDate() + dias);
+  return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, "0")}-${String(data.getDate()).padStart(2, "0")}`;
 }
 
 function parseDateOnly(value: string | null | undefined) {
@@ -114,22 +125,9 @@ function parseDateOnly(value: string | null | undefined) {
   return new Date(year, month - 1, day);
 }
 
-function isSameDate(dateA: Date | null, dateB: Date) {
-  if (!dateA) return false;
-  return (
-    dateA.getFullYear() === dateB.getFullYear() &&
-    dateA.getMonth() === dateB.getMonth() &&
-    dateA.getDate() === dateB.getDate()
-  );
-}
-
 function safeNumber(value: unknown) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : 0;
-}
-
-function isContaEmAberto(conta: ContaReceber) {
-  return !conta.dt_baixa && safeNumber(conta.vlr_receb) <= 0;
 }
 
 function isDataDentroDoMes(date: Date | null, mesSelecionado: Date) {
@@ -157,6 +155,23 @@ function formatarMesAno(data: Date) {
 
 function isRecebida(conta: ContaReceber) {
   return Boolean(conta.dt_baixa) || Number(conta.vlr_receb || 0) > 0;
+}
+
+function getStatusContaDashboard(conta: ContaReceber): StatusContaDashboard {
+  if (isRecebida(conta)) return "recebida";
+
+  const vencimento = normalizarData(conta.dt_vencto);
+  if (!vencimento) return "a_vencer";
+
+  const hoje = hojeISO();
+  if (vencimento === hoje) return "vencendo_hoje";
+  if (vencimento > hoje) return "a_vencer";
+
+  const diasCarenciaValor = safeNumber(conta.dias_carencia);
+  const diasCarencia = diasCarenciaValor >= 0 ? Math.trunc(diasCarenciaValor) : 0;
+  const fimCarencia = adicionarDiasISO(vencimento, diasCarencia);
+
+  return hoje <= fimCarencia ? "em_carencia" : "vencida";
 }
 
 function valorPreenchido(valor: string | null | undefined) {
@@ -208,15 +223,12 @@ function dataEstaHoje(valor: string | null | undefined) {
 }
 
 function isContaVencidaNoPeriodo(conta: ContaReceber, inicioMes: Date, fimMes: Date) {
-  if (isRecebida(conta)) return false;
+  if (getStatusContaDashboard(conta) !== "vencida") return false;
 
   const vencimento = parseDateOnly(conta.dt_vencto);
   if (!vencimento) return false;
 
-  const hojeData = new Date();
-  const hojePuro = new Date(hojeData.getFullYear(), hojeData.getMonth(), hojeData.getDate());
-
-  return vencimento >= inicioMes && vencimento < fimMes && vencimento < hojePuro;
+  return vencimento >= inicioMes && vencimento < fimMes;
 }
 
 function getContasVencidasNoMes(contas: ContaReceber[], mesSelecionado: Date) {
@@ -254,28 +266,22 @@ function calcularRecebidasNoMes(contas: ContaReceber[], mesSelecionado: Date) {
 }
 
 function calcularDashboard(contas: ContaReceber[]): DashboardResumo {
-  const hojeData = new Date();
-  const hoje = new Date(hojeData.getFullYear(), hojeData.getMonth(), hojeData.getDate());
-  const hojeTexto = hojeISO();
-
   return contas.reduce<DashboardResumo>(
     (resumo, conta) => {
-      const vencimento = normalizarData(conta.dt_vencto);
-      const recebida = isRecebida(conta);
+      const status = getStatusContaDashboard(conta);
 
-      if (recebida) {
+      if (status === "recebida") {
         resumo.recebidas += 1;
-        return resumo;
-      }
-
-      if (isSameDate(parseDateOnly(conta.dt_vencto), hoje) && isContaEmAberto(conta)) {
+      } else if (status === "vencendo_hoje") {
         resumo.vencendoHoje += 1;
         resumo.valorVencendoHoje += safeNumber(conta.vlr_ctarec);
-      } else if (vencimento !== null && vencimento < hojeTexto) {
+      } else if (status === "em_carencia") {
+        resumo.emCarencia += 1;
+      } else if (status === "vencida") {
         resumo.clientesEmAtraso += 1;
         resumo.vencidas += 1;
         resumo.valorEmAtraso += safeNumber(conta.vlr_ctarec);
-      } else if (vencimento !== null && vencimento > hojeTexto) {
+      } else if (status === "a_vencer") {
         resumo.aVencer += 1;
       }
 
@@ -288,6 +294,7 @@ function calcularDashboard(contas: ContaReceber[]): DashboardResumo {
       valorVencendoHoje: 0,
       recebidas: 0,
       vencidas: 0,
+      emCarencia: 0,
       aVencer: 0,
     },
   );
@@ -386,11 +393,12 @@ export function Dashboard() {
   const quantidadeRecebidasMes = recebidasMes.quantidade;
   const valorRecebidasMes = recebidasMes.valorTotal;
   const mesRecebidasSelecionadoLabel = formatarMesAno(mesRecebidasSelecionado);
-  const totalStatus = Math.max(1, resumo.vencidas + resumo.vencendoHoje + resumo.aVencer + resumo.recebidas);
+  const totalStatus = Math.max(1, resumo.vencidas + resumo.vencendoHoje + resumo.emCarencia + resumo.aVencer + resumo.recebidas);
 
   const barras: Array<[string, number, string]> = [
     ["Vencidas", resumo.vencidas, "bar-red"],
     ["Vencendo hoje", resumo.vencendoHoje, "bar-blue"],
+    ["Em carência", resumo.emCarencia, "bar-orange"],
     ["A vencer", resumo.aVencer, "bar-dark"],
     ["Recebidas", resumo.recebidas, "bar-green"],
   ];

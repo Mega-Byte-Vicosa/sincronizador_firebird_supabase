@@ -15,6 +15,8 @@ interface ModeloMensagem {
   atualizado_por: string | null;
   criado_em: string;
   atualizado_em: string;
+  origem: "geral" | "cobranca";
+  categoria: string | null;
 }
 
 interface ModeloForm {
@@ -99,11 +101,38 @@ export function ModelosMensagem() {
       .order("modelo_global", { ascending: false })
       .order("modelo_msg_titulo", { ascending: true });
 
-    if (error) {
+    const { data: modelosCobranca, error: erroCobranca } = await supabase
+      .from("tab_modelos_mensagem")
+      .select("id, id_empresa, nome, categoria, corpo, ativo, padrao, criado_em, atualizado_em")
+      .eq("id_empresa", usuario.id_empresa)
+      .order("categoria", { ascending: true })
+      .order("nome", { ascending: true });
+
+    if (error || erroCobranca) {
       setModelos([]);
       setErro("Não foi possível carregar os modelos de mensagem.");
     } else {
-      setModelos((data ?? []) as ModeloMensagem[]);
+      const gerais = (data ?? []).map((modelo) => ({
+        ...modelo,
+        origem: "geral" as const,
+        categoria: null,
+      }));
+      const cobranca = (modelosCobranca ?? []).map((modelo) => ({
+        id: modelo.id,
+        id_empresa: modelo.id_empresa,
+        modelo_msg_titulo: modelo.nome,
+        modelo_msg: modelo.corpo,
+        ativo: modelo.ativo,
+        modelo_global: false,
+        modelo_sistema: modelo.padrao,
+        criado_por: null,
+        atualizado_por: null,
+        criado_em: modelo.criado_em,
+        atualizado_em: modelo.atualizado_em,
+        origem: "cobranca" as const,
+        categoria: modelo.categoria,
+      }));
+      setModelos([...cobranca, ...gerais]);
     }
 
     setCarregando(false);
@@ -301,13 +330,13 @@ export function ModelosMensagem() {
                   <td><strong>{modelo.modelo_msg_titulo}</strong></td>
                   <td><span className="models-message-preview">{criarPrevia(modelo.modelo_msg)}</span></td>
                   <td><span className={`models-status-badge ${modelo.ativo ? "models-status-active" : "models-status-inactive"}`}>{modelo.ativo ? "Ativo" : "Inativo"}</span></td>
-                  <td><span className={`models-origin-badge ${modelo.modelo_global ? "models-origin-global" : "models-origin-company"}`}>{modelo.modelo_global ? "Global" : "Empresa"}</span></td>
+                  <td><span className={`models-origin-badge ${modelo.modelo_global ? "models-origin-global" : "models-origin-company"}`}>{modelo.origem === "cobranca" ? "Cobrança" : modelo.modelo_global ? "Global" : "Empresa"}</span></td>
                   <td>{formatarDataHora(modelo.criado_em)}</td>
                   <td>
                     <div className="models-row-actions">
                       <button type="button" onClick={() => setVisualizando(modelo)} title="Visualizar" aria-label={`Visualizar ${modelo.modelo_msg_titulo}`}><ModelIcon name="view" /></button>
-                      <button type="button" onClick={() => abrirEdicao(modelo)} title="Editar" aria-label={`Editar ${modelo.modelo_msg_titulo}`}><ModelIcon name="edit" /></button>
-                      <button type="button" onClick={() => void alternarStatus(modelo)} title={modelo.ativo ? "Inativar" : "Ativar"} aria-label={`${modelo.ativo ? "Inativar" : "Ativar"} ${modelo.modelo_msg_titulo}`}><ModelIcon name="toggle" /></button>
+                      {modelo.origem === "geral" && <button type="button" onClick={() => abrirEdicao(modelo)} title="Editar" aria-label={`Editar ${modelo.modelo_msg_titulo}`}><ModelIcon name="edit" /></button>}
+                      {modelo.origem === "geral" && <button type="button" onClick={() => void alternarStatus(modelo)} title={modelo.ativo ? "Inativar" : "Ativar"} aria-label={`${modelo.ativo ? "Inativar" : "Ativar"} ${modelo.modelo_msg_titulo}`}><ModelIcon name="toggle" /></button>}
                     </div>
                   </td>
                 </tr>
@@ -320,13 +349,13 @@ export function ModelosMensagem() {
           {modelosFiltrados.map((modelo) => (
             <article className="models-mobile-card" key={modelo.id}>
               <div><strong>{modelo.modelo_msg_titulo}</strong><span className={`models-status-badge ${modelo.ativo ? "models-status-active" : "models-status-inactive"}`}>{modelo.ativo ? "Ativo" : "Inativo"}</span></div>
-              <span className={`models-origin-badge ${modelo.modelo_global ? "models-origin-global" : "models-origin-company"}`}>{modelo.modelo_global ? "Global" : "Empresa"}</span>
+              <span className={`models-origin-badge ${modelo.modelo_global ? "models-origin-global" : "models-origin-company"}`}>{modelo.origem === "cobranca" ? "Cobrança" : modelo.modelo_global ? "Global" : "Empresa"}</span>
               <p>{criarPrevia(modelo.modelo_msg)}</p>
               <small>Criado em {formatarDataHora(modelo.criado_em)}</small>
               <div className="models-row-actions">
                 <button type="button" onClick={() => setVisualizando(modelo)} title="Visualizar"><ModelIcon name="view" /><span>Visualizar</span></button>
-                <button type="button" onClick={() => abrirEdicao(modelo)} title="Editar"><ModelIcon name="edit" /><span>Editar</span></button>
-                <button type="button" onClick={() => void alternarStatus(modelo)} title={modelo.ativo ? "Inativar" : "Ativar"}><ModelIcon name="toggle" /><span>{modelo.ativo ? "Inativar" : "Ativar"}</span></button>
+                {modelo.origem === "geral" && <button type="button" onClick={() => abrirEdicao(modelo)} title="Editar"><ModelIcon name="edit" /><span>Editar</span></button>}
+                {modelo.origem === "geral" && <button type="button" onClick={() => void alternarStatus(modelo)} title={modelo.ativo ? "Inativar" : "Ativar"}><ModelIcon name="toggle" /><span>{modelo.ativo ? "Inativar" : "Ativar"}</span></button>}
               </div>
             </article>
           ))}
@@ -362,7 +391,7 @@ export function ModelosMensagem() {
           <aside className="models-view-modal" role="dialog" aria-modal="true" aria-labelledby="models-view-title" onClick={(event) => event.stopPropagation()}>
             <header><div><h2 id="models-view-title">{visualizando.modelo_msg_titulo}</h2><span className={`models-status-badge ${visualizando.ativo ? "models-status-active" : "models-status-inactive"}`}>{visualizando.ativo ? "Ativo" : "Inativo"}</span></div><button type="button" onClick={() => setVisualizando(null)} aria-label="Fechar"><ModelIcon name="close" /></button></header>
             <p>{visualizando.modelo_msg}</p>
-            <footer><button className="primary-button" type="button" onClick={() => { setVisualizando(null); abrirEdicao(visualizando); }}><ModelIcon name="edit" />Editar modelo</button></footer>
+            {visualizando.origem === "geral" && <footer><button className="primary-button" type="button" onClick={() => { setVisualizando(null); abrirEdicao(visualizando); }}><ModelIcon name="edit" />Editar modelo</button></footer>}
           </aside>
         </div>
       )}

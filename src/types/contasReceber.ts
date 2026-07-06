@@ -9,6 +9,10 @@ export interface ContaReceber {
   hr_baixa: string | null;
   vlr_ctarec: number;
   vlr_receb: number | null;
+  perc_multa: number | null;
+  tipo_juros: string | null;
+  perc_juros: number | null;
+  dias_carencia: number | null;
   tip_ctarec: string;
   id_portador: number | null;
   id_cliente: number;

@@ -333,18 +333,27 @@ export function Automacoes() {
         {!carregando && automacoesFiltradas.length === 0 && <div className="state-box">Nenhuma automação encontrada.</div>}
         {!carregando && automacoesFiltradas.length > 0 && (
           <div className="table-wrap"><table className="automations-table">
-            <thead><tr><th>Campanha</th><th>Tipo</th><th>Público</th><th>Aptos agora</th><th>Ignorados</th><th>Status</th><th>Início</th><th>Termina em</th><th>Contínua</th><th>Última execução</th><th>Próxima verificação</th><th>Envios</th><th>Ações</th></tr></thead>
+            <thead><tr><th>Campanha</th><th>Público</th><th>Público agora</th><th>Status</th><th>Período</th><th>Contínua</th><th>Execuções</th><th>Envios</th><th>Ações</th></tr></thead>
             <tbody>{automacoesFiltradas.map((automacao) => {
               const atual = statusEfetivo(automacao);
               const previa = obterPrevia(automacao);
-              return <tr key={automacao.id}>
-                <td><strong>{automacao.nome}</strong></td><td>{labelAutomacao(automacao)}</td>
-                <td><span className="automation-continuous">Dinâmico</span></td><td>{previa.aptos}</td><td>{previa.ignorados}</td>
+              return <tr className={`automation-row-card automation-row-card-${atual}`} key={automacao.id}>
+                <td><strong>{automacao.nome}</strong><small>{labelAutomacao(automacao)}</small></td>
+                <td><span className="automation-continuous">Dinâmico</span></td>
+                <td><div className="automation-card-pair">
+                  <div><span>Aptos agora</span><strong>{previa.aptos}</strong></div>
+                  <div><span>Ignorados</span><strong>{previa.ignorados}</strong></div>
+                </div></td>
                 <td><span className={`automation-status automation-status-${atual}`}>{statusLabels[atual]}</span></td>
-                <td>{formatarDataHora(automacao.data_hora_agendamento || automacao.data_hora_criacao)}</td>
-                <td>{automacao.campanha_continua ? "-" : formatarDataHora(automacao.termina_em)}</td>
+                <td><div className="automation-card-pair">
+                  <div><span>Início</span><strong>{formatarDataHora(automacao.data_hora_agendamento || automacao.data_hora_criacao)}</strong></div>
+                  <div><span>Termina em</span><strong>{automacao.campanha_continua ? "-" : formatarDataHora(automacao.termina_em)}</strong></div>
+                </div></td>
                 <td>{automacao.campanha_continua ? <span className="automation-continuous">Contínua</span> : "Não"}</td>
-                <td>{formatarDataHora(automacao.automacao_ultima_execucao_em)}</td><td>{formatarDataHora(automacao.automacao_proxima_execucao_em)}</td>
+                <td><div className="automation-card-pair">
+                  <div><span>Última execução</span><strong>{formatarDataHora(automacao.automacao_ultima_execucao_em)}</strong></div>
+                  <div><span>Próxima execução</span><strong>{formatarDataHora(automacao.automacao_proxima_execucao_em)}</strong></div>
+                </div></td>
                 <td>{automacao.automacao_total_envios}</td>
                 <td><div className="automation-actions">
                   <button type="button" title="Visualizar" onClick={() => setDetalhes(automacao)}><AutomationIcon name="view" /></button>
