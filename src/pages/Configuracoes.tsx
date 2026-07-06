@@ -147,8 +147,8 @@ function getMensagemStatusInstancia(data: BtzapInstanceData | null) {
 
 export function Configuracoes() {
   const { usuario } = useAuth();
-  const [nomeInstancia, setNomeInstancia] = useState("WhatsAppFelipe");
-  const [urlServidor, setUrlServidor] = useState("https://server.btzap.com.br");
+  const [nomeInstancia, setNomeInstancia] = useState("");
+  const [urlServidor, setUrlServidor] = useState("");
   const [endpointEnvioTexto, setEndpointEnvioTexto] = useState("/send/text");
   const [metodoEnvioTexto, setMetodoEnvioTexto] = useState("POST");
   const [formatoPayload, setFormatoPayload] = useState("btzap");
@@ -238,8 +238,8 @@ export function Configuracoes() {
 
   console.log("Configuração BTZap carregada pela Edge:", config);
 
-  setNomeInstancia(config.nome_instancia ?? "WhatsAppFelipe");
-  setUrlServidor(config.url_servidor ?? "https://server.btzap.com.br");
+  setNomeInstancia(config.nome_instancia ?? "");
+  setUrlServidor(config.url_servidor ?? "");
   setEndpointEnvioTexto(config.endpoint_envio_texto ?? "/send/text");
   setMetodoEnvioTexto(config.metodo_envio_texto ?? "POST");
   setFormatoPayload(config.formato_payload ?? "btzap");

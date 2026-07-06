@@ -3,9 +3,6 @@ import { sendBtzapMessage, validateBtzapConfig } from "../_shared/btzapClient.ts
 import { extrairMensagemIdExterno } from "../_shared/btzapMessageStatus.ts";
 import { createSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 
-const EMPRESA_PADRAO_ID = "00000000-0000-0000-0000-000000000001";
-
-
 function transformarErroEmTexto(valor: unknown): string {
   if (valor === null || valor === undefined) return "";
   if (typeof valor === "string") return valor.trim();
@@ -53,7 +50,7 @@ function criarMensagemAmigavelBtzap(erro: string) {
 
 
 function obterIdEmpresa(payload: Record<string, unknown>) {
-  return String(payload.id_empresa || payload.idEmpresa || EMPRESA_PADRAO_ID).trim();
+  return String(payload.id_empresa || payload.idEmpresa || "").trim();
 }
 
 function formatarData(valor: string | null) {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { useAuth } from "../auth/AuthContext";
 import type { ContaReceber } from "../types/contasReceber";
 import { formatarDataHora, formatarMoeda } from "./ContasAReceber";
 
@@ -301,6 +302,7 @@ function calcularDashboard(contas: ContaReceber[]): DashboardResumo {
 }
 
 export function Dashboard() {
+  const { usuario } = useAuth();
   const [contas, setContas] = useState<ContaReceber[]>([]);
   const [mesSelecionado, setMesSelecionado] = useState(() => getInicioMes(new Date()));
   const [mesRecebidasSelecionado, setMesRecebidasSelecionado] = useState(() => getInicioMes(new Date()));
@@ -309,6 +311,11 @@ export function Dashboard() {
   const [erro, setErro] = useState<string | null>(null);
 
   const carregarMonitoramentoWhatsapp = useCallback(async () => {
+    if (!usuario?.id_empresa) {
+      setMonitoramentoWhatsapp(monitoramentoInicial);
+      return;
+    }
+
     try {
       const hoje = new Date();
       const inicioHoje = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()).toISOString();
@@ -319,7 +326,10 @@ export function Dashboard() {
         .select(
           "id, nome_instancia, url_servidor, token_instancia, ativo, endpoint_envio_texto, metodo_envio_texto, formato_payload, atualizado_em",
         )
-        .eq("id", 1)
+        .eq("id_empresa", usuario.id_empresa)
+        .eq("ativo", true)
+        .order("atualizado_em", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
       if (configError) throw configError;
@@ -327,6 +337,7 @@ export function Dashboard() {
       const { data: enviosHoje, error: enviosError } = await supabase
         .from("tab_whatsapp_envios")
         .select("id, status, criado_em, enviado_em")
+        .eq("id_empresa", usuario.id_empresa)
         .gte("criado_em", inicioHoje)
         .lt("criado_em", fimHoje);
 
@@ -354,14 +365,21 @@ export function Dashboard() {
         ultimaAtualizacao: "-",
       });
     }
-  }, []);
+  }, [usuario?.id_empresa]);
 
   const carregarDashboard = useCallback(async () => {
     setCarregando(true);
     setErro(null);
 
+    if (!usuario?.id_empresa) {
+      setContas([]);
+      setMonitoramentoWhatsapp(monitoramentoInicial);
+      setCarregando(false);
+      return;
+    }
+
     const [{ data, error }] = await Promise.all([
-      supabase.from("firebird_contas_receber").select("*"),
+      supabase.from("firebird_contas_receber").select("*").eq("id_empresa", usuario.id_empresa),
       carregarMonitoramentoWhatsapp(),
     ]);
 
@@ -373,7 +391,7 @@ export function Dashboard() {
     }
 
     setCarregando(false);
-  }, [carregarMonitoramentoWhatsapp]);
+  }, [carregarMonitoramentoWhatsapp, usuario?.id_empresa]);
 
   useEffect(() => {
     void carregarDashboard();
