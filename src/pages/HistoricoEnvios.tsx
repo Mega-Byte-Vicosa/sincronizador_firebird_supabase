@@ -86,30 +86,28 @@ function getStatusClass(status: string | null) {
   return "history-status history-status-pendente";
 }
 
-function getStatusEntrega(status: string | null | undefined) {
-  const normalizado = String(status ?? "").trim().toUpperCase();
-  if (normalizado === "ENVIADO_API") return { label: "Enviado pela API", className: "delivery-status-api" };
-  if (normalizado === "ENTREGUE") return { label: "Entregue ao cliente", className: "delivery-status-delivered" };
-  if (normalizado === "LIDO") return { label: "Lida pelo cliente", className: "delivery-status-read" };
-  if (normalizado === "FALHOU") return { label: "Falhou", className: "delivery-status-failed" };
-  return { label: "Não informado", className: "delivery-status-unknown" };
+function renderConfirmacaoEntrega(envio: WhatsappEnvio) {
+  const entregue = Boolean(envio.entregue_em || envio.lido_em || ["ENTREGUE", "LIDO"].includes(String(envio.status_entrega ?? "").toUpperCase()));
+  const falhou = String(envio.status_entrega ?? "").toUpperCase() === "FALHOU";
+  const label = entregue ? "Entrega confirmada" : falhou ? "Falhou" : "Aguardando entrega";
+  const className = entregue ? "delivery-status-delivered" : falhou ? "delivery-status-failed" : "delivery-status-unknown";
+  const data = envio.entregue_em || envio.lido_em || envio.falhou_em;
+
+  return <div className="history-delivery-status">
+    <span className={`delivery-status-badge ${className}`}>{label}</span>
+    {data && <small>{formatarDataHora(data)}</small>}
+  </div>;
 }
 
-function renderStatusEntrega(envio: WhatsappEnvio) {
-  const status = getStatusEntrega(envio.status_entrega);
-  const datas = [
-    envio.enviado_api_em && `Enviado API: ${formatarDataHora(envio.enviado_api_em)}`,
-    envio.entregue_em && `Entregue: ${formatarDataHora(envio.entregue_em)}`,
-    envio.lido_em && `Lido: ${formatarDataHora(envio.lido_em)}`,
-    envio.falhou_em && `Falhou: ${formatarDataHora(envio.falhou_em)}`,
-  ].filter(Boolean) as string[];
+function renderConfirmacaoVisualizacao(envio: WhatsappEnvio) {
+  const visualizada = Boolean(envio.lido_em || String(envio.status_entrega ?? "").toUpperCase() === "LIDO");
 
-  return (
-    <div className="history-delivery-status">
-      <span className={`delivery-status-badge ${status.className}`}>{status.label}</span>
-      {datas.length > 0 && <small title={datas.join("\n")}>{datas.join(" · ")}</small>}
-    </div>
-  );
+  return <div className="history-delivery-status">
+    <span className={`delivery-status-badge ${visualizada ? "delivery-status-read" : "delivery-status-unknown"}`}>
+      {visualizada ? "Visualizada" : "Não confirmada"}
+    </span>
+    {envio.lido_em && <small>{formatarDataHora(envio.lido_em)}</small>}
+  </div>;
 }
 
 function dataInicioDia(data: string) {
@@ -388,6 +386,7 @@ export function HistoricoEnvios() {
               <col className="history-col-type" />
               <col className="history-col-status" />
               <col className="history-col-status" />
+              <col className="history-col-status" />
               <col className="history-col-message" />
               <col className="history-col-error" />
             </colgroup>
@@ -400,7 +399,8 @@ export function HistoricoEnvios() {
                 <th>Origem</th>
                 <th>Tipo</th>
                 <th>Status do envio</th>
-                <th>Status de entrega</th>
+                <th>Confirmação de entrega</th>
+                <th>Confirmação de visualização</th>
                 <th>Mensagem</th>
                 <th>Erro</th>
               </tr>
@@ -408,7 +408,7 @@ export function HistoricoEnvios() {
             <tbody>
               {!carregando && !erro && enviosFiltrados.length === 0 && (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={11}>
                     <div className="empty-table-message">
                       {temFiltrosAtivos
                         ? "Nenhum envio encontrado para os filtros selecionados."
@@ -429,7 +429,8 @@ export function HistoricoEnvios() {
                   <td>
                     <span className={getStatusClass(envio.status)}>{mostrarValor(envio.status)}</span>
                   </td>
-                  <td>{renderStatusEntrega(envio)}</td>
+                  <td>{renderConfirmacaoEntrega(envio)}</td>
+                  <td>{renderConfirmacaoVisualizacao(envio)}</td>
                   <td>
                     <span className="history-message-cell" title={mostrarValor(envio.mensagem)}>
                       {resumirMensagem(envio.mensagem)}
