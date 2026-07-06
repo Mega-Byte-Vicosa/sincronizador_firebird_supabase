@@ -47,7 +47,7 @@ export function getCategoriaModeloConta(conta: ContaReceber): CategoriaModeloMen
   return hojeISO() <= limiteISO ? "contas_receber_carencia" : "contas_receber_vencida";
 }
 
-function calcularValorAtual(conta: ContaReceber) {
+export function calcularValorAtualContaReceber(conta: ContaReceber) {
   const original = Number(conta.vlr_ctarec ?? 0);
   if (getCategoriaModeloConta(conta) !== "contas_receber_vencida") return original;
   const vencimento = dataISO(conta.dt_vencto);
@@ -61,6 +61,17 @@ function calcularValorAtual(conta: ContaReceber) {
   // A carência impede cobrança enquanto estiver vigente. Caso a conta ultrapasse a carência,
   // multa e juros são calculados considerando a data original de vencimento.
   return original + multa + juros;
+}
+
+export function prepararCorpoModeloContaReceber(conta: ContaReceber, corpo: string) {
+  if (getCategoriaModeloConta(conta) !== "contas_receber_vencida") return corpo;
+
+  return corpo
+    .split(/\r?\n/)
+    .filter((linha) => !linha.includes("{{valor_original}}"))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export function aplicarVariaveisModelo(texto: string, variaveis: Record<string, string>) {
@@ -80,7 +91,7 @@ export function montarVariaveisContaReceber(
     data_final_carencia: limite ? formatarData(limite) : "",
     dias_carencia: String(diasCarencia(conta)),
     valor_original: moeda.format(Number(conta.vlr_ctarec ?? 0)),
-    valor_atual: getCategoriaModeloConta(conta) === "contas_receber_vencida" ? moeda.format(calcularValorAtual(conta)) : "",
+    valor_atual: getCategoriaModeloConta(conta) === "contas_receber_vencida" ? moeda.format(calcularValorAtualContaReceber(conta)) : "",
     data_envio: formatarData(new Date()),
     empresa_nome: empresa?.nome || "Nossa empresa",
     link_pagamento: "",

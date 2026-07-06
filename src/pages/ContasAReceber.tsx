@@ -5,7 +5,7 @@ import { ProgramarMensagemContaReceberModal } from "./MensagensProgramadas";
 import { montarMensagemCobrancaWhatsapp } from "../utils/mensagemCobranca";
 import { useAuth } from "../auth/AuthContext";
 import type { ModeloMensagem } from "../types/modeloMensagem";
-import { aplicarVariaveisModelo, buscarModelosMensagem, getCategoriaModeloConta, montarVariaveisContaReceber } from "../utils/modelosMensagem";
+import { aplicarVariaveisModelo, buscarModelosMensagem, getCategoriaModeloConta, montarVariaveisContaReceber, prepararCorpoModeloContaReceber } from "../utils/modelosMensagem";
 
 type TipoConta = "Todos" | "N" | "C" | "D" | "E";
 type OutroFiltro = "Vencidas e vencendo hoje" | "Todos" | "Vencendo hoje" | "A vencer" | "Em carência" | "Vencidas" | "Recebidas";
@@ -1077,7 +1077,7 @@ export function ContasAReceber() {
     if (!revisaoWhatsapp) return;
     const modelo = revisaoWhatsapp.modelos.find((item) => item.id === idModelo);
     const mensagem = modelo
-      ? aplicarVariaveisModelo(modelo.corpo, montarVariaveisContaReceber(revisaoWhatsapp.conta, {
+      ? aplicarVariaveisModelo(prepararCorpoModeloContaReceber(revisaoWhatsapp.conta, modelo.corpo), montarVariaveisContaReceber(revisaoWhatsapp.conta, {
           nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
         }))
       : revisaoWhatsapp.mensagem;

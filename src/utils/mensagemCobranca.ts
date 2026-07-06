@@ -1,4 +1,5 @@
 import type { ContaReceber } from "../types/contasReceber";
+import { calcularValorAtualContaReceber, getCategoriaModeloConta } from "./modelosMensagem";
 
 const moedaFormatter = new Intl.NumberFormat("pt-BR", {
   style: "currency",
@@ -7,16 +8,21 @@ const moedaFormatter = new Intl.NumberFormat("pt-BR", {
 
 export function montarMensagemCobrancaWhatsapp(conta: ContaReceber) {
   const nome = conta.cliente_nome ? ` ${conta.cliente_nome}` : "";
-  const valor = moedaFormatter.format(Number(conta.vlr_ctarec ?? 0));
+  const contaVencida = getCategoriaModeloConta(conta) === "contas_receber_vencida";
+  const valor = moedaFormatter.format(
+    contaVencida ? calcularValorAtualContaReceber(conta) : Number(conta.vlr_ctarec ?? 0),
+  );
+  const descricaoValor = contaVencida ? "valor atualizado para pagamento hoje" : "valor";
 
-  return `Olá${nome}, tudo bem com você?
+  return `Olá${nome}, tudo bem?
 
-Gostaria de informar que consta conosco uma pendência no valor de ${valor}, referente ao documento ${conta.documento ?? "-"}.
+Identificamos uma pendência referente ao documento ${conta.documento ?? "-"}.
 
-Para evitar multas, bloqueios ou demais transtornos, gostaríamos de contar com sua atenção para regularizar esse débito.
+O ${descricaoValor} é ${valor}.${contaVencida ? " Esse valor já considera os encargos aplicáveis até a data de hoje." : ""}
+
+Pedimos, por gentileza, que regularize o pagamento ou entre em contato conosco.
 
 Caso já tenha efetuado o pagamento, por favor desconsidere esta mensagem.
 
-Att,
-Gerência.`;
+Atenciosamente.`;
 }

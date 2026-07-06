@@ -12,7 +12,7 @@ import { MetricCardIcon } from "../components/layout/MetricCardIcon";
 import { montarMensagemCobrancaWhatsapp } from "../utils/mensagemCobranca";
 import { useAuth } from "../auth/AuthContext";
 import type { ModeloMensagem } from "../types/modeloMensagem";
-import { aplicarVariaveisModelo, buscarModelosMensagem, getCategoriaModeloConta, montarVariaveisContaReceber } from "../utils/modelosMensagem";
+import { aplicarVariaveisModelo, buscarModelosMensagem, getCategoriaModeloConta, montarVariaveisContaReceber, prepararCorpoModeloContaReceber } from "../utils/modelosMensagem";
 
 interface FiltrosMensagensProgramadas {
   busca: string;
@@ -1571,7 +1571,7 @@ export function ProgramarMensagemContaReceberModal({
     setModeloSelecionado(idModelo);
     const modelo = modelos.find((item) => item.id === idModelo);
     if (!modelo) return;
-    const mensagem = aplicarVariaveisModelo(modelo.corpo, montarVariaveisContaReceber(conta, {
+    const mensagem = aplicarVariaveisModelo(prepararCorpoModeloContaReceber(conta, modelo.corpo), montarVariaveisContaReceber(conta, {
       nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
     }));
     setForm({ ...form, mensagem });
