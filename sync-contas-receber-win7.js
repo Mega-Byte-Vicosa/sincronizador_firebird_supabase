@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const Firebird = require('node-firebird');
+const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 
 const INTERVALO_MINUTOS = Number(process.env.SYNC_INTERVAL_MINUTES || 10);
@@ -11,6 +12,7 @@ let empresaAtual = null;
 let sincronizacaoEmAndamento = false;
 let ultimaSincronizacaoCompletaDia = null;
 let processamentoMensagensEmAndamento = false;
+let sincronizacaoCompletaPendenteSetup = false;
 
 const firebirdOptions = {
   host: process.env.FIREBIRD_HOST,
@@ -35,6 +37,7 @@ async function processarMensagensProgramadas(idEmpresaParam) {
 
   try {
     const idEmpresa = idEmpresaParam || await obterIdEmpresaAtual();
+    if (!idEmpresa) return;
 
     const resposta = await supabase.functions.invoke(
       'btzap-process-scheduled-messages',
@@ -213,6 +216,14 @@ function formatarCnpj(cnpj) {
     limpo.substring(12, 14);
 }
 
+function gerarIdentificadorBaseFirebird(cnpjLimpo) {
+  const caminho = String(process.env.FIREBIRD_DATABASE || '').trim();
+  const host = String(process.env.FIREBIRD_HOST || '').trim();
+  const base = cnpjLimpo + '|' + host + '|' + caminho;
+
+  return crypto.createHash('sha256').update(base).digest('hex');
+}
+
 function montarTelefoneEmpresa(row) {
   const dddCelular = converterTexto(row.ddd_celul);
   const foneCelular = converterTexto(row.fone_celul);
@@ -266,98 +277,42 @@ async function buscarEmpresaNoFirebird(db) {
   };
 }
 
-async function garantirEmpresaNoSupabase(dadosEmpresa) {
-  const cnpjsPossiveis = [dadosEmpresa.cnpj, dadosEmpresa.cnpj_formatado].filter(Boolean);
-
-  const busca = await supabase
-    .from('tab_empresas')
-    .select('id, cnpj, nome_fantasia')
-    .in('cnpj', cnpjsPossiveis)
-    .limit(1);
-
-  if (busca.error) {
-    throw busca.error;
-  }
-
-  if (busca.data && busca.data.length > 0) {
-    const empresa = busca.data[0];
-
-    const atualizacao = await supabase
-      .from('tab_empresas')
-      .update({
-        cnpj: dadosEmpresa.cnpj,
-        razao_social: dadosEmpresa.razao_social,
-        nome_fantasia: dadosEmpresa.nome_fantasia,
-        ativo: true,
-        atualizado_em: new Date().toISOString()
-      })
-      .eq('id', empresa.id)
-      .select('id, cnpj, nome_fantasia')
-      .single();
-
-    if (atualizacao.error) {
-      throw atualizacao.error;
-    }
-
-    console.log('Empresa identificada no Supabase: ' + (atualizacao.data.nome_fantasia || atualizacao.data.cnpj));
-    console.log('ID empresa Supabase: ' + atualizacao.data.id);
-
-    empresaAtual = atualizacao.data;
-    return atualizacao.data.id;
-  }
-
-  const insercao = await supabase
-    .from('tab_empresas')
-    .insert({
-      cnpj: dadosEmpresa.cnpj,
-      razao_social: dadosEmpresa.razao_social,
-      nome_fantasia: dadosEmpresa.nome_fantasia,
-      ativo: true
-    })
-    .select('id, cnpj, nome_fantasia')
-    .single();
-
-  if (insercao.error) {
-    throw insercao.error;
-  }
-
-  console.log('Empresa cadastrada no Supabase: ' + (insercao.data.nome_fantasia || insercao.data.cnpj));
-  console.log('ID empresa Supabase: ' + insercao.data.id);
-
-  empresaAtual = insercao.data;
-  return insercao.data.id;
-}
-
-async function garantirUsuarioAdminInicial(dadosEmpresa, idEmpresa) {
-  const criarAdminInicial = String(process.env.SAAS_CRIAR_ADMIN_INICIAL || 'true').toLowerCase() === 'true';
-
-  if (!criarAdminInicial) {
-    return;
-  }
-
-  const usuario = process.env.SAAS_ADMIN_USUARIO || 'admin';
-  const senha = process.env.SAAS_ADMIN_SENHA || '123456';
-  const nome = process.env.SAAS_ADMIN_NOME || 'Administrador';
-  const email = process.env.SAAS_ADMIN_EMAIL || dadosEmpresa.email || '';
-
-  const resposta = await supabase.rpc('fn_criar_usuario_admin_inicial', {
-    p_id_empresa: idEmpresa,
-    p_cnpj: dadosEmpresa.cnpj_formatado || dadosEmpresa.cnpj,
+async function registrarInstalacaoFirebird(dadosEmpresa) {
+  const identificador = gerarIdentificadorBaseFirebird(dadosEmpresa.cnpj);
+  const resposta = await supabase.rpc('fn_registrar_instalacao_firebird', {
     p_cnpj_limpo: dadosEmpresa.cnpj,
-    p_usuario: usuario,
-    p_senha: senha,
-    p_nome: nome,
-    p_email: email
+    p_cnpj_formatado: dadosEmpresa.cnpj_formatado,
+    p_razao_social: dadosEmpresa.razao_social,
+    p_nome_fantasia: dadosEmpresa.nome_fantasia,
+    p_email: dadosEmpresa.email,
+    p_telefone: dadosEmpresa.telefone,
+    p_identificador_base_firebird: identificador,
+    p_caminho_base_firebird: String(process.env.FIREBIRD_DATABASE || '').trim()
   });
 
-  if (resposta.error) {
-    throw resposta.error;
+  if (resposta.error) throw resposta.error;
+  const data = resposta.data;
+  if (!data || !data.success) throw new Error(data && data.message ? data.message : 'Não foi possível registrar a instalação Firebird.');
+
+  if (data.status === 'nova_empresa') {
+    console.log('[SETUP] Nova empresa identificada. Primeiro acesso pendente para criação da senha admin.');
+  }
+  if (data.precisa_criar_senha_admin) {
+    console.log('[SETUP] Usuário admin pendente de criação de senha pelo primeiro acesso.');
+  }
+  if (data.status === 'cnpj_existente_aguardando_decisao') {
+    console.log('[SETUP] CNPJ já cadastrado no Supabase. Aguardando decisão do usuário no sistema.');
+    console.log('Este CNPJ já existe no Supabase. Acesse o sistema e escolha se deseja usar os dados existentes ou substituir os dados sincronizados.');
+    return null;
   }
 
-  console.log('Usuário SaaS inicial verificado/criado.');
-  console.log('Usuário: ' + usuario);
-  console.log('Senha inicial: ' + senha);
-  console.log('ID usuário: ' + resposta.data);
+  console.log('[SETUP] Instalação autorizada. Sincronização liberada.');
+  sincronizacaoCompletaPendenteSetup = data.forcar_sincronizacao_completa === true;
+  if (sincronizacaoCompletaPendenteSetup) {
+    console.log('[SETUP] Substituição de dados confirmada. Próxima sincronização será completa.');
+  }
+  empresaAtual = { id: data.id_empresa, identificador_base_firebird: identificador };
+  return data.id_empresa;
 }
 
 async function obterIdEmpresaAtual(dbExistente) {
@@ -377,11 +332,7 @@ async function obterIdEmpresaAtual(dbExistente) {
     }
 
     const dadosEmpresa = await buscarEmpresaNoFirebird(dbLocal);
-    const idEmpresa = await garantirEmpresaNoSupabase(dadosEmpresa);
-
-    await garantirUsuarioAdminInicial(dadosEmpresa, idEmpresa);
-
-    return idEmpresa;
+    return await registrarInstalacaoFirebird(dadosEmpresa);
   } finally {
     if (dbLocal && deveFecharConexao) {
       try {
@@ -1021,7 +972,7 @@ async function sincronizar(modoForcado) {
 
   sincronizacaoEmAndamento = true;
 
-  const modoSincronizacao = modoForcado || definirModoSincronizacao();
+  let modoSincronizacao = modoForcado || definirModoSincronizacao();
 
   let db;
 
@@ -1049,6 +1000,15 @@ async function sincronizar(modoForcado) {
     console.log('Identificando empresa local pela TB_EMITENTE...');
 
     const idEmpresa = await obterIdEmpresaAtual(db);
+    if (!idEmpresa) {
+      console.log('[SETUP] Sincronização de clientes e contas bloqueada até a decisão do usuário.');
+      return;
+    }
+
+    if (sincronizacaoCompletaPendenteSetup) {
+      modoSincronizacao = 'completa';
+      console.log('[SETUP] Executando sincronização completa após substituição dos dados.');
+    }
 
     await sincronizarClientes(db, idEmpresa);
     await sincronizarContasReceber(db, idEmpresa, modoSincronizacao);
@@ -1056,6 +1016,15 @@ async function sincronizar(modoForcado) {
     if (modoSincronizacao === 'completa') {
       ultimaSincronizacaoCompletaDia = obterDataAtualChave();
       console.log('Sincronização completa registrada para o dia ' + ultimaSincronizacaoCompletaDia + '.');
+
+      if (sincronizacaoCompletaPendenteSetup) {
+        const atualizacaoSetup = await supabase
+          .from('tab_empresas')
+          .update({ setup_status: 'concluido', atualizado_setup_em: new Date().toISOString() })
+          .eq('id', idEmpresa);
+        if (atualizacaoSetup.error) throw atualizacaoSetup.error;
+        sincronizacaoCompletaPendenteSetup = false;
+      }
     }
 
     console.log('Sincronização concluída com sucesso - ' + new Date().toLocaleString('pt-BR'));

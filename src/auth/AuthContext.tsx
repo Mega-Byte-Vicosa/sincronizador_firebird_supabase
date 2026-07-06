@@ -24,6 +24,19 @@ interface AuthResult {
   cliente?: unknown;
 }
 
+export interface PrimeiroAcessoStatus extends AuthResult {
+  status?: string;
+  id_empresa?: string;
+  empresa_nome?: string;
+  cnpj_limpo?: string;
+  primeiro_acesso_concluido?: boolean;
+  admin_senha_pendente?: boolean;
+  deve_definir_senha?: boolean;
+  setup_status?: string;
+  precisa_decidir_substituicao?: boolean;
+  identificador_base_firebird?: string;
+}
+
 interface AtualizarPermissoesClienteParams {
   idCliente: string | number;
   permiteCampanha: boolean;
@@ -36,6 +49,9 @@ interface AuthContextValue {
   usuario: UsuarioSaas | null;
   carregando: boolean;
   entrar: (cnpj: string, usuario: string, senha: string) => Promise<AuthResult>;
+  consultarPrimeiroAcesso: (cnpj: string, usuario: string) => Promise<PrimeiroAcessoStatus>;
+  definirSenhaInicialAdmin: (cnpj: string, usuario: string, senha: string) => Promise<AuthResult>;
+  decidirInstalacaoExistente: (idEmpresa: string, identificadorBase: string, decisao: "usar_existente" | "substituir_dados", confirmacao?: string) => Promise<AuthResult>;
   alterarSenha: (senhaAtual: string, novaSenha: string) => Promise<AuthResult>;
   atualizarPermissoesCliente: (params: AtualizarPermissoesClienteParams) => Promise<AuthResult>;
   sair: () => Promise<void>;
@@ -105,6 +121,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     return resultado;
+  }
+
+  async function consultarPrimeiroAcesso(cnpj: string, nomeUsuario: string) {
+    const { data, error } = await supabase.rpc("fn_status_primeiro_acesso", {
+      p_cnpj: cnpj,
+      p_usuario: nomeUsuario,
+    });
+
+    if (error) return { success: false, message: "Não foi possível consultar o primeiro acesso." };
+    return data as PrimeiroAcessoStatus;
+  }
+
+  async function definirSenhaInicialAdmin(cnpj: string, nomeUsuario: string, senha: string) {
+    const { data, error } = await supabase.rpc("fn_definir_senha_admin_primeiro_acesso", {
+      p_cnpj: cnpj,
+      p_usuario: nomeUsuario,
+      p_senha: senha,
+    });
+
+    if (error) return { success: false, message: "Não foi possível criar a senha do administrador." };
+    return data as AuthResult;
+  }
+
+  async function decidirInstalacaoExistente(
+    idEmpresa: string,
+    identificadorBase: string,
+    decisao: "usar_existente" | "substituir_dados",
+    confirmacao?: string,
+  ) {
+    const { data, error } = await supabase.rpc("fn_decidir_instalacao_cnpj_existente", {
+      p_id_empresa: idEmpresa,
+      p_identificador_base_firebird: identificadorBase,
+      p_decisao: decisao,
+      p_confirmacao: confirmacao ?? null,
+    });
+
+    if (error) return { success: false, message: "Não foi possível salvar a decisão da instalação." };
+    return data as AuthResult;
   }
 
   async function alterarSenha(senhaAtual: string, novaSenha: string) {
@@ -180,6 +234,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       usuario,
       carregando,
       entrar,
+      consultarPrimeiroAcesso,
+      definirSenhaInicialAdmin,
+      decidirInstalacaoExistente,
       alterarSenha,
       atualizarPermissoesCliente,
       sair,
