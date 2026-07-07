@@ -17,6 +17,11 @@ interface CampanhaAutomatizada {
   automacao_dias_antes_vencimento: number | null;
   automacao_dias_sem_compra: number | null;
   automacao_dias_pos_compra: number | null;
+  automacao_repeticao_tipo: "diaria" | "dias_semana" | "mensal" | null;
+  automacao_dias_semana: number[] | null;
+  automacao_meses: number[] | null;
+  automacao_horarios: string[] | null;
+  automacao_timezone: string | null;
   publico_dinamico: boolean;
   campanha_continua: boolean;
   termina_em: string | null;
@@ -76,6 +81,22 @@ function labelAutomacao(automacao: CampanhaAutomatizada) {
   if (automacao.tipo_automacao === "clientes_sem_comprar_dias") return `Cliente sem comprar por ${automacao.automacao_dias_sem_compra ?? "-"} dias`;
   if (automacao.tipo_automacao === "pos_compra_dias") return `Pós-compra em ${automacao.automacao_dias_pos_compra ?? "-"} dias`;
   return tipoLabels[automacao.tipo_automacao ?? ""] ?? "-";
+}
+
+const nomesDiasSemana = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+const nomesMeses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+function labelAgenda(automacao: CampanhaAutomatizada) {
+  const horarios = (automacao.automacao_horarios ?? []).map((horario) => horario.slice(0, 5)).join(" e ") || "-";
+  if (automacao.automacao_repeticao_tipo === "dias_semana") {
+    const dias = (automacao.automacao_dias_semana ?? []).map((dia) => nomesDiasSemana[dia]).filter(Boolean).join(", ");
+    return `${dias || "Dias não definidos"} às ${horarios}`;
+  }
+  if (automacao.automacao_repeticao_tipo === "mensal") {
+    const meses = (automacao.automacao_meses ?? []).map((mes) => nomesMeses[mes - 1]).filter(Boolean).join(", ");
+    return `${meses || "Meses não definidos"} às ${horarios}`;
+  }
+  return `Diariamente às ${horarios}`;
 }
 
 function normalizar(value: unknown) {
@@ -212,7 +233,7 @@ export function Automacoes() {
     setErro(null);
     const [campanhasResult, clientesResult, contasResult] = await Promise.all([
       supabase.from("tab_campanha")
-        .select("id, id_empresa, nome, objetivo, mensagem, tipo_automacao, automacao_dias_carencia, automacao_dias_antes_vencimento, automacao_dias_sem_compra, automacao_dias_pos_compra, publico_dinamico, campanha_continua, termina_em, automacao_status, automacao_ultima_execucao_em, automacao_proxima_execucao_em, automacao_total_envios, automacao_total_erros, data_hora_criacao, data_hora_agendamento, criado_em")
+        .select("id, id_empresa, nome, objetivo, mensagem, tipo_automacao, automacao_dias_carencia, automacao_dias_antes_vencimento, automacao_dias_sem_compra, automacao_dias_pos_compra, automacao_repeticao_tipo, automacao_dias_semana, automacao_meses, automacao_horarios, automacao_timezone, publico_dinamico, campanha_continua, termina_em, automacao_status, automacao_ultima_execucao_em, automacao_proxima_execucao_em, automacao_total_envios, automacao_total_erros, data_hora_criacao, data_hora_agendamento, criado_em")
         .eq("id_empresa", usuario.id_empresa).eq("automatizada", true).order("criado_em", { ascending: false }),
       supabase.from("tab_cliente")
         .select("id_cliente, dt_nascto, dt_ultcomp, ddd_celul, fone_celul, permite_campanha, contato_restrito")
@@ -345,7 +366,7 @@ export function Automacoes() {
               const atual = statusEfetivo(automacao);
               const previa = obterPrevia(automacao);
               return <tr className={`automation-row-card automation-row-card-${atual}`} key={automacao.id}>
-                <td><strong>{automacao.nome}</strong><small>{labelAutomacao(automacao)}</small></td>
+                <td><strong>{automacao.nome}</strong><small>{labelAutomacao(automacao)}</small><small className="automation-schedule-label">{labelAgenda(automacao)}</small></td>
                 <td><span className="automation-continuous">Dinâmico</span></td>
                 <td><div className="automation-card-pair">
                   <div><span>Aptos agora</span><strong>{previa.aptos}</strong></div>
@@ -377,7 +398,7 @@ export function Automacoes() {
       {detalhes && <div className="modal-backdrop" role="presentation" onClick={() => setDetalhes(null)}>
         <aside className="automation-details-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
           <header><div><h2>{detalhes.nome}</h2><span className={`automation-status automation-status-${statusEfetivo(detalhes)}`}>{statusLabels[statusEfetivo(detalhes)]}</span></div><button type="button" onClick={() => setDetalhes(null)} aria-label="Fechar"><AutomationIcon name="close" /></button></header>
-          <dl><div><dt>Tipo de automação</dt><dd>{labelAutomacao(detalhes)}</dd></div><div><dt>Público</dt><dd>Dinâmico</dd></div>{detalhes.tipo_automacao === "contas_vencidas_com_carencia" && <div><dt>Dias de carência</dt><dd>{detalhes.automacao_dias_carencia ?? "-"}</dd></div>}{detalhes.tipo_automacao === "contas_a_vencer_dias" && <div><dt>Dias antes do vencimento</dt><dd>{detalhes.automacao_dias_antes_vencimento ?? "-"}</dd></div>}{detalhes.tipo_automacao === "clientes_sem_comprar_dias" && <div><dt>Dias sem comprar</dt><dd>{detalhes.automacao_dias_sem_compra ?? "-"}</dd></div>}{detalhes.tipo_automacao === "pos_compra_dias" && <div><dt>Dias após a compra</dt><dd>{detalhes.automacao_dias_pos_compra ?? "-"}</dd></div>}<div><dt>Aptos agora</dt><dd>{obterPrevia(detalhes).aptos}</dd></div><div><dt>Ignorados agora</dt><dd>{obterPrevia(detalhes).ignorados}</dd></div><div><dt>Início</dt><dd>{formatarDataHora(detalhes.data_hora_agendamento || detalhes.data_hora_criacao)}</dd></div><div><dt>Termina em</dt><dd>{detalhes.campanha_continua ? "Campanha contínua" : formatarDataHora(detalhes.termina_em)}</dd></div><div><dt>Total de envios</dt><dd>{detalhes.automacao_total_envios}</dd></div><div><dt>Total de erros</dt><dd>{detalhes.automacao_total_erros}</dd></div></dl>
+          <dl><div><dt>Tipo de automação</dt><dd>{labelAutomacao(detalhes)}</dd></div><div><dt>Agenda</dt><dd>{labelAgenda(detalhes)}</dd></div><div><dt>Fuso horário</dt><dd>{detalhes.automacao_timezone === "America/Sao_Paulo" ? "Brasília" : detalhes.automacao_timezone || "-"}</dd></div><div><dt>Público</dt><dd>Dinâmico</dd></div>{detalhes.tipo_automacao === "contas_vencidas_com_carencia" && <div><dt>Dias de carência</dt><dd>{detalhes.automacao_dias_carencia ?? "-"}</dd></div>}{detalhes.tipo_automacao === "contas_a_vencer_dias" && <div><dt>Dias antes do vencimento</dt><dd>{detalhes.automacao_dias_antes_vencimento ?? "-"}</dd></div>}{detalhes.tipo_automacao === "clientes_sem_comprar_dias" && <div><dt>Dias sem comprar</dt><dd>{detalhes.automacao_dias_sem_compra ?? "-"}</dd></div>}{detalhes.tipo_automacao === "pos_compra_dias" && <div><dt>Dias após a compra</dt><dd>{detalhes.automacao_dias_pos_compra ?? "-"}</dd></div>}<div><dt>Aptos agora</dt><dd>{obterPrevia(detalhes).aptos}</dd></div><div><dt>Ignorados agora</dt><dd>{obterPrevia(detalhes).ignorados}</dd></div><div><dt>Início</dt><dd>{formatarDataHora(detalhes.data_hora_agendamento || detalhes.data_hora_criacao)}</dd></div><div><dt>Termina em</dt><dd>{detalhes.campanha_continua ? "Campanha contínua" : formatarDataHora(detalhes.termina_em)}</dd></div><div><dt>Última execução</dt><dd>{formatarDataHora(detalhes.automacao_ultima_execucao_em)}</dd></div><div><dt>Próxima execução</dt><dd>{formatarDataHora(detalhes.automacao_proxima_execucao_em)}</dd></div><div><dt>Total de envios</dt><dd>{detalhes.automacao_total_envios}</dd></div><div><dt>Total de erros</dt><dd>{detalhes.automacao_total_erros}</dd></div></dl>
           <section><h3>Mensagem</h3><p>{detalhes.mensagem || "-"}</p></section>
         </aside>
       </div>}

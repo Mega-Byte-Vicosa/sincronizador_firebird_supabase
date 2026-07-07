@@ -4,7 +4,6 @@ import { extrairMensagemIdExterno } from "./btzapMessageStatus.ts";
 import { createSupabaseAdmin } from "./supabaseAdmin.ts";
 
 const LIMITE_ENVIOS_AUTOMACAO = 5;
-const INTERVALO_MONITORAMENTO_MS = 10 * 60 * 1000;
 const TIME_ZONE = "America/Sao_Paulo";
 
 interface CampanhaAutomatizada {
@@ -17,6 +16,11 @@ interface CampanhaAutomatizada {
   automacao_dias_antes_vencimento: number | null;
   automacao_dias_sem_compra: number | null;
   automacao_dias_pos_compra: number | null;
+  automacao_repeticao_tipo: "diaria" | "dias_semana" | "mensal" | null;
+  automacao_dias_semana: number[] | null;
+  automacao_meses: number[] | null;
+  automacao_horarios: string[] | null;
+  automacao_timezone: string | null;
   empresa_destino: string | null;
   aos_cuidados: string | null;
   campanha_continua: boolean;
@@ -56,6 +60,7 @@ interface ContaAutomacao {
 }
 
 interface DataCivil { ano: number; mes: number; dia: number }
+interface HorarioExecucao { data: DataCivil; horario: string }
 
 function dataCivilAgora(): DataCivil {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -86,6 +91,81 @@ function deslocarDias(data: DataCivil, dias: number): DataCivil {
 
 function compararDatas(a: DataCivil, b: DataCivil) {
   return chaveData(a).localeCompare(chaveData(b));
+}
+
+function partesNoFuso(data: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(data);
+  const value = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return { ano: value("year"), mes: value("month"), dia: value("day"), hora: value("hour"), minuto: value("minute") };
+}
+
+function agendaPermiteData(campanha: CampanhaAutomatizada, data: DataCivil) {
+  if (campanha.automacao_repeticao_tipo === "dias_semana") {
+    const diaSemana = new Date(Date.UTC(data.ano, data.mes - 1, data.dia)).getUTCDay();
+    return (campanha.automacao_dias_semana ?? []).includes(diaSemana);
+  }
+  if (campanha.automacao_repeticao_tipo === "mensal") return (campanha.automacao_meses ?? []).includes(data.mes);
+  return campanha.automacao_repeticao_tipo === "diaria";
+}
+
+function encontrarHorarioDevido(campanha: CampanhaAutomatizada, agora: Date): HorarioExecucao | null {
+  const timeZone = campanha.automacao_timezone || TIME_ZONE;
+  const local = partesNoFuso(agora, timeZone);
+  const data = { ano: local.ano, mes: local.mes, dia: local.dia };
+  if (!agendaPermiteData(campanha, data)) return null;
+  const atual = `${String(local.hora).padStart(2, "0")}:${String(local.minuto).padStart(2, "0")}`;
+  const horarios = (campanha.automacao_horarios ?? []).map((item) => String(item).slice(0, 5)).filter((item) => /^([01]\d|2[0-3]):[0-5]\d$/.test(item)).sort();
+  const devido = horarios.filter((horario) => horario <= atual).at(-1);
+  return devido ? { data, horario: devido } : null;
+}
+
+function dataLocalParaUtc(data: DataCivil, horario: string, timeZone: string) {
+  const [hora, minuto] = horario.split(":").map(Number);
+  let timestamp = Date.UTC(data.ano, data.mes - 1, data.dia, hora, minuto);
+  for (let i = 0; i < 3; i++) {
+    const atual = partesNoFuso(new Date(timestamp), timeZone);
+    const desejadoUtc = Date.UTC(data.ano, data.mes - 1, data.dia, hora, minuto);
+    const atualUtc = Date.UTC(atual.ano, atual.mes - 1, atual.dia, atual.hora, atual.minuto);
+    timestamp += desejadoUtc - atualUtc;
+  }
+  return new Date(timestamp);
+}
+
+function calcularProximaExecucao(campanha: CampanhaAutomatizada, agora: Date) {
+  const timeZone = campanha.automacao_timezone || TIME_ZONE;
+  const local = partesNoFuso(agora, timeZone);
+  const inicio = { ano: local.ano, mes: local.mes, dia: local.dia };
+  const horarios = (campanha.automacao_horarios ?? []).map((item) => String(item).slice(0, 5)).sort();
+  for (let deslocamento = 0; deslocamento <= 370; deslocamento++) {
+    const data = deslocarDias(inicio, deslocamento);
+    if (!agendaPermiteData(campanha, data)) continue;
+    for (const horario of horarios) {
+      const candidata = dataLocalParaUtc(data, horario, timeZone);
+      if (candidata > agora) return candidata.toISOString();
+    }
+  }
+  return null;
+}
+
+async function iniciarExecucao(supabase: ReturnType<typeof createSupabaseAdmin>, campanha: CampanhaAutomatizada, slot: HorarioExecucao) {
+  const { data, error } = await supabase.from("tab_automacao_execucoes").insert({
+    id_empresa: campanha.id_empresa, id_campanha: campanha.id, tipo_automacao: campanha.tipo_automacao,
+    data_execucao: chaveData(slot.data), horario_execucao: slot.horario, status: "processando",
+  }).select("id").single();
+  if (error?.code === "23505") return null;
+  if (error) throw error;
+  return String(data.id);
+}
+
+async function finalizarExecucao(
+  supabase: ReturnType<typeof createSupabaseAdmin>, id: string, status: "concluida" | "erro",
+  enviados: number, erros: number, erro: string | null,
+) {
+  await supabase.from("tab_automacao_execucoes").update({
+    status, total_enviados: enviados, total_erros: erros, erro, finalizado_em: new Date().toISOString(),
+  }).eq("id", id);
 }
 
 function clienteAtendeRegra(cliente: ClienteAutomacao, campanha: CampanhaAutomatizada, hoje: DataCivil) {
@@ -319,7 +399,7 @@ async function registrarHistoricoConta(
 export async function processarCampanhasAutomatizadas(
   supabase: ReturnType<typeof createSupabaseAdmin>, idEmpresa?: string | null,
 ) {
-  let query = supabase.from("tab_campanha").select("id, id_empresa, nome, mensagem, tipo_automacao, automacao_dias_carencia, automacao_dias_antes_vencimento, automacao_dias_sem_compra, automacao_dias_pos_compra, empresa_destino, aos_cuidados, campanha_continua, termina_em, data_hora_agendamento, automacao_proxima_execucao_em, automacao_total_envios, automacao_total_erros")
+  let query = supabase.from("tab_campanha").select("id, id_empresa, nome, mensagem, tipo_automacao, automacao_dias_carencia, automacao_dias_antes_vencimento, automacao_dias_sem_compra, automacao_dias_pos_compra, automacao_repeticao_tipo, automacao_dias_semana, automacao_meses, automacao_horarios, automacao_timezone, empresa_destino, aos_cuidados, campanha_continua, termina_em, data_hora_agendamento, automacao_proxima_execucao_em, automacao_total_envios, automacao_total_erros")
     .eq("automatizada", true).eq("publico_dinamico", true).eq("automacao_status", "ativa").eq("tipo_comunicacao", "whatsapp")
     .order("criado_em", { ascending: true }).limit(20);
   if (idEmpresa) query = query.eq("id_empresa", idEmpresa);
@@ -338,7 +418,17 @@ export async function processarCampanhasAutomatizadas(
       await supabase.from("tab_campanha").update({ automacao_status: "encerrada" }).eq("id", campanha.id).eq("id_empresa", campanha.id_empresa);
       continue;
     }
-    if (campanha.automacao_proxima_execucao_em && new Date(campanha.automacao_proxima_execucao_em) > agora) continue;
+    const slot = encontrarHorarioDevido(campanha, agora);
+    if (!slot) {
+      const proxima = calcularProximaExecucao(campanha, agora);
+      if (proxima !== campanha.automacao_proxima_execucao_em) {
+        await supabase.from("tab_campanha").update({ automacao_proxima_execucao_em: proxima }).eq("id", campanha.id).eq("id_empresa", campanha.id_empresa);
+      }
+      continue;
+    }
+    const idExecucao = await iniciarExecucao(supabase, campanha, slot);
+    if (!idExecucao) continue;
+    const proximaExecucao = calcularProximaExecucao(campanha, agora);
 
     if (isAutomacaoCobranca(campanha.tipo_automacao)) {
       let enviados = 0;
@@ -396,13 +486,15 @@ export async function processarCampanhasAutomatizadas(
 
         await supabase.from("tab_campanha").update({
           automacao_ultima_execucao_em: new Date().toISOString(),
-          automacao_proxima_execucao_em: new Date(Date.now() + INTERVALO_MONITORAMENTO_MS).toISOString(),
+          automacao_proxima_execucao_em: proximaExecucao,
           automacao_total_envios: Number(campanha.automacao_total_envios ?? 0) + enviados,
           automacao_total_erros: Number(campanha.automacao_total_erros ?? 0) + erros,
         }).eq("id", campanha.id).eq("id_empresa", campanha.id_empresa);
+        await finalizarExecucao(supabase, idExecucao, "concluida", enviados, erros, null);
         resultados.push({ id_campanha: campanha.id, success: true, encontrados: elegiveis.length, aptos: aptos.length, enviados, erros });
       } catch (campaignError) {
         const message = campaignError instanceof Error ? campaignError.message : String(campaignError);
+        await finalizarExecucao(supabase, idExecucao, "erro", enviados, erros + 1, message);
         await supabase.from("tab_campanha").update({ automacao_status: "erro", automacao_total_erros: Number(campanha.automacao_total_erros ?? 0) + 1 }).eq("id", campanha.id).eq("id_empresa", campanha.id_empresa);
         resultados.push({ id_campanha: campanha.id, success: false, error: message });
       }
@@ -413,7 +505,13 @@ export async function processarCampanhasAutomatizadas(
     const { data: clientes, error: clientesError } = await supabase.from("tab_cliente")
       .select("id_cliente, nome, dt_nascto, dt_pricomp, dt_ultcomp, ddd_celul, fone_celul, permite_campanha, contato_restrito")
       .eq("id_empresa", campanha.id_empresa);
-    if (clientesError) throw clientesError;
+    if (clientesError) {
+      const message = clientesError.message;
+      await finalizarExecucao(supabase, idExecucao, "erro", 0, 1, message);
+      await supabase.from("tab_campanha").update({ automacao_status: "erro", automacao_total_erros: Number(campanha.automacao_total_erros ?? 0) + 1 }).eq("id", campanha.id).eq("id_empresa", campanha.id_empresa);
+      resultados.push({ id_campanha: campanha.id, success: false, error: message });
+      continue;
+    }
     const elegiveis = (clientes ?? []).filter((item) => clienteAtendeRegra(item as ClienteAutomacao, campanha, hoje)) as ClienteAutomacao[];
     const aptos = elegiveis.filter((cliente) => telefoneBrasil(cliente) && cliente.contato_restrito !== true && cliente.permite_campanha === true);
     let enviados = 0;
@@ -443,15 +541,16 @@ export async function processarCampanhasAutomatizadas(
         enviosNoCiclo++;
       }
 
-      const proxima = new Date(Date.now() + INTERVALO_MONITORAMENTO_MS).toISOString();
       await supabase.from("tab_campanha").update({
-        automacao_ultima_execucao_em: new Date().toISOString(), automacao_proxima_execucao_em: proxima,
+        automacao_ultima_execucao_em: new Date().toISOString(), automacao_proxima_execucao_em: proximaExecucao,
         automacao_total_envios: Number(campanha.automacao_total_envios ?? 0) + enviados,
         automacao_total_erros: Number(campanha.automacao_total_erros ?? 0) + erros,
       }).eq("id", campanha.id).eq("id_empresa", campanha.id_empresa);
+      await finalizarExecucao(supabase, idExecucao, "concluida", enviados, erros, null);
       resultados.push({ id_campanha: campanha.id, success: true, encontrados: elegiveis.length, aptos: aptos.length, enviados, erros });
     } catch (campaignError) {
       const message = campaignError instanceof Error ? campaignError.message : String(campaignError);
+      await finalizarExecucao(supabase, idExecucao, "erro", enviados, erros + 1, message);
       await supabase.from("tab_campanha").update({ automacao_status: "erro", automacao_total_erros: Number(campanha.automacao_total_erros ?? 0) + 1 }).eq("id", campanha.id).eq("id_empresa", campanha.id_empresa);
       resultados.push({ id_campanha: campanha.id, success: false, error: message });
     }

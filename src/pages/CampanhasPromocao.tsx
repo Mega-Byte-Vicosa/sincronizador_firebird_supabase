@@ -9,6 +9,7 @@ import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 type TipoComunicacao = "whatsapp" | "email" | "instagram";
 type StatusCampanha = "rascunho" | "programada" | "enviando" | "pausada" | "concluida" | "cancelada";
 type AutomacaoStatus = "inativa" | "ativa" | "pausada" | "encerrada" | "erro";
+type AutomacaoRepeticaoTipo = "diaria" | "dias_semana" | "mensal";
 type FiltroStatusCampanha = "padrao" | "todos" | StatusCampanha;
 type FiltroPublico =
   | "todos"
@@ -38,6 +39,11 @@ interface Campanha {
   automacao_dias_antes_vencimento: number | null;
   automacao_dias_sem_compra: number | null;
   automacao_dias_pos_compra: number | null;
+  automacao_repeticao_tipo: AutomacaoRepeticaoTipo | null;
+  automacao_dias_semana: number[] | null;
+  automacao_meses: number[] | null;
+  automacao_horarios: string[] | null;
+  automacao_timezone: string;
   campanha_continua: boolean;
   termina_em: string | null;
   automacao_status: AutomacaoStatus;
@@ -130,6 +136,11 @@ interface FormCampanha {
   automacaoDiasAntesVencimento: string;
   automacaoDiasSemCompra: string;
   automacaoDiasPosCompra: string;
+  automacaoRepeticaoTipo: AutomacaoRepeticaoTipo;
+  automacaoDiasSemana: number[];
+  automacaoMeses: number[];
+  automacaoHorarios: string[];
+  automacaoTimezone: string;
   campanhaContinua: boolean;
   terminaEm: string;
   automacaoStatus: AutomacaoStatus;
@@ -167,6 +178,11 @@ const formInicial: FormCampanha = {
   automacaoDiasAntesVencimento: "",
   automacaoDiasSemCompra: "",
   automacaoDiasPosCompra: "",
+  automacaoRepeticaoTipo: "diaria",
+  automacaoDiasSemana: [],
+  automacaoMeses: [],
+  automacaoHorarios: ["08:00"],
+  automacaoTimezone: "America/Sao_Paulo",
   campanhaContinua: false,
   terminaEm: "",
   automacaoStatus: "inativa",
@@ -182,6 +198,17 @@ const formInicial: FormCampanha = {
   arquivoUrl: "",
   observacoes: "",
 };
+
+const diasSemanaAutomacao = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+const mesesAutomacao = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+function normalizarHorarioAutomacao(horario: string) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(horario) ? horario : "";
+}
+
+function horarioBancoParaInput(horario: string) {
+  return String(horario ?? "").slice(0, 5);
+}
 
 const filtrosPublico: Array<{ value: FiltroPublico; label: string }> = [
   { value: "todos", label: "Todos os clientes" },
@@ -613,9 +640,13 @@ type CampaignModalIconName =
   | "info"
   | "edit"
   | "pause"
-  | "copy";
+  | "copy"
+  | "calendar";
 
 function CampaignModalIcon({ name }: { name: CampaignModalIconName }) {
+  if (name === "calendar") {
+    return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M8 3v4M16 3v4M3 10h18M12 14v3l2 1" /></svg>;
+  }
   if (name === "megaphone") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -762,6 +793,7 @@ export function CampanhasPromocao() {
   const [modelosAtivos, setModelosAtivos] = useState<ModeloMensagemAtivo[]>([]);
   const [modelosCobranca, setModelosCobranca] = useState<ModeloMensagem[]>([]);
   const [modeloSelecionado, setModeloSelecionado] = useState("");
+  const [novoHorarioAutomacao, setNovoHorarioAutomacao] = useState("");
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatusCampanha>("padrao");
   const [filtrosLista, setFiltrosLista] = useState<FiltrosListaCampanhas>(filtrosListaCampanhasIniciais);
 
@@ -975,6 +1007,7 @@ export function CampanhasPromocao() {
 
   function abrirNovaCampanha() {
     setForm({ ...formInicial, dataHoraAgendamento: "" });
+    setNovoHorarioAutomacao("");
     setSelecionados(new Set());
     setEtapa(1);
     setModalAberto(true);
@@ -1000,6 +1033,11 @@ export function CampanhasPromocao() {
       automacaoDiasAntesVencimento: campanha.automacao_dias_antes_vencimento === null ? "" : String(campanha.automacao_dias_antes_vencimento),
       automacaoDiasSemCompra: campanha.automacao_dias_sem_compra === null ? "" : String(campanha.automacao_dias_sem_compra),
       automacaoDiasPosCompra: campanha.automacao_dias_pos_compra === null ? "" : String(campanha.automacao_dias_pos_compra),
+      automacaoRepeticaoTipo: campanha.automacao_repeticao_tipo ?? "diaria",
+      automacaoDiasSemana: campanha.automacao_dias_semana ?? [],
+      automacaoMeses: campanha.automacao_meses ?? [],
+      automacaoHorarios: (campanha.automacao_horarios ?? ["08:00"]).map(horarioBancoParaInput).filter(Boolean),
+      automacaoTimezone: campanha.automacao_timezone || "America/Sao_Paulo",
       campanhaContinua: campanha.campanha_continua ?? false,
       terminaEm: formatarDataInput(campanha.termina_em),
       automacaoStatus: campanha.automacao_status ?? (campanha.automatizada ? "ativa" : "inativa"),
@@ -1021,6 +1059,7 @@ export function CampanhasPromocao() {
     setFeedback(null);
     setAvisoPublico(null);
     setModeloSelecionado("");
+    setNovoHorarioAutomacao("");
     void carregarModelosAtivos();
   }
 
@@ -1039,6 +1078,11 @@ export function CampanhasPromocao() {
       automacaoDiasAntesVencimento: campanha.automacao_dias_antes_vencimento === null ? "" : String(campanha.automacao_dias_antes_vencimento),
       automacaoDiasSemCompra: campanha.automacao_dias_sem_compra === null ? "" : String(campanha.automacao_dias_sem_compra),
       automacaoDiasPosCompra: campanha.automacao_dias_pos_compra === null ? "" : String(campanha.automacao_dias_pos_compra),
+      automacaoRepeticaoTipo: campanha.automacao_repeticao_tipo ?? "diaria",
+      automacaoDiasSemana: campanha.automacao_dias_semana ?? [],
+      automacaoMeses: campanha.automacao_meses ?? [],
+      automacaoHorarios: (campanha.automacao_horarios ?? ["08:00"]).map(horarioBancoParaInput).filter(Boolean),
+      automacaoTimezone: campanha.automacao_timezone || "America/Sao_Paulo",
       campanhaContinua: campanha.campanha_continua ?? false,
       terminaEm: "",
       automacaoStatus: campanha.automatizada ? "ativa" : "inativa",
@@ -1056,6 +1100,7 @@ export function CampanhasPromocao() {
     setModalAberto(true);
     setAvisoPublico(null);
     setModeloSelecionado("");
+    setNovoHorarioAutomacao("");
     void carregarModelosAtivos();
   }
 
@@ -1206,6 +1251,31 @@ export function CampanhasPromocao() {
     setForm({ ...form, mensagem: modeloCobranca?.corpo ?? modelo?.modelo_msg ?? form.mensagem });
   }
 
+  function alternarItemAgenda(campo: "automacaoDiasSemana" | "automacaoMeses", valor: number) {
+    const atuais = form[campo];
+    const proximos = atuais.includes(valor) ? atuais.filter((item) => item !== valor) : [...atuais, valor].sort((a, b) => a - b);
+    setForm({ ...form, [campo]: proximos });
+  }
+
+  function adicionarHorarioAutomacao() {
+    const horario = normalizarHorarioAutomacao(novoHorarioAutomacao);
+    if (!horario) {
+      setErro("Informe um horário válido no formato HH:mm.");
+      return;
+    }
+    if (form.automacaoHorarios.includes(horario)) {
+      setErro("Este horário já foi adicionado.");
+      return;
+    }
+    setForm({ ...form, automacaoHorarios: [...form.automacaoHorarios, horario].sort() });
+    setNovoHorarioAutomacao("");
+    setErro(null);
+  }
+
+  function removerHorarioAutomacao(horario: string) {
+    setForm({ ...form, automacaoHorarios: form.automacaoHorarios.filter((item) => item !== horario) });
+  }
+
   function validarFormulario(status: StatusCampanha) {
     if (!form.nome.trim()) return "Informe o nome da campanha.";
     if (!form.tipoComunicacao) return "Informe o tipo de comunicação.";
@@ -1228,6 +1298,19 @@ export function CampanhasPromocao() {
     if (form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "pos_compra_dias") {
       const dias = Number(form.automacaoDiasPosCompra);
       if (!Number.isInteger(dias) || dias < 1) return "Informe os dias após a compra com um número inteiro maior ou igual a 1.";
+    }
+    if (form.automatizada && !["diaria", "dias_semana", "mensal"].includes(form.automacaoRepeticaoTipo)) {
+      return "Informe o tipo de repetição da automação.";
+    }
+    if (form.automatizada && form.automacaoHorarios.length === 0) return "Adicione ao menos um horário de disparo.";
+    if (form.automatizada && form.automacaoHorarios.some((horario) => !normalizarHorarioAutomacao(horario))) {
+      return "Existe um horário de disparo inválido.";
+    }
+    if (form.automatizada && form.automacaoRepeticaoTipo === "dias_semana" && form.automacaoDiasSemana.length === 0) {
+      return "Selecione ao menos um dia da semana.";
+    }
+    if (form.automatizada && form.automacaoRepeticaoTipo === "mensal" && form.automacaoMeses.length === 0) {
+      return "Selecione ao menos um mês de execução.";
     }
     if (!form.mensagem.trim()) return "Informe a mensagem da campanha.";
     if (status === "programada" && !form.dataHoraAgendamento) return "Informe data e hora de agendamento.";
@@ -1298,6 +1381,15 @@ export function CampanhasPromocao() {
         form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "pos_compra_dias"
           ? Number(form.automacaoDiasPosCompra)
           : null,
+      automacao_repeticao_tipo: form.automatizada ? form.automacaoRepeticaoTipo : null,
+      automacao_dias_semana: form.automatizada && form.automacaoRepeticaoTipo === "dias_semana"
+        ? [...form.automacaoDiasSemana].sort((a, b) => a - b)
+        : null,
+      automacao_meses: form.automatizada && form.automacaoRepeticaoTipo === "mensal"
+        ? [...form.automacaoMeses].sort((a, b) => a - b)
+        : null,
+      automacao_horarios: form.automatizada ? [...form.automacaoHorarios].sort() : null,
+      automacao_timezone: form.automacaoTimezone || "America/Sao_Paulo",
       campanha_continua: form.automatizada ? form.campanhaContinua : false,
       termina_em: form.automatizada && !form.campanhaContinua && form.terminaEm
         ? new Date(form.terminaEm).toISOString()
@@ -1762,6 +1854,11 @@ export function CampanhasPromocao() {
                           automacaoDiasAntesVencimento: automatizada ? form.automacaoDiasAntesVencimento : "",
                           automacaoDiasSemCompra: automatizada ? form.automacaoDiasSemCompra : "",
                           automacaoDiasPosCompra: automatizada ? form.automacaoDiasPosCompra : "",
+                          automacaoRepeticaoTipo: automatizada ? form.automacaoRepeticaoTipo : "diaria",
+                          automacaoDiasSemana: automatizada ? form.automacaoDiasSemana : [],
+                          automacaoMeses: automatizada ? form.automacaoMeses : [],
+                          automacaoHorarios: automatizada ? form.automacaoHorarios : [],
+                          automacaoTimezone: "America/Sao_Paulo",
                           campanhaContinua: automatizada ? form.campanhaContinua : false,
                           terminaEm: automatizada ? form.terminaEm : "",
                           automacaoStatus: automatizada ? "ativa" : "inativa",
@@ -2159,6 +2256,67 @@ export function CampanhasPromocao() {
                           <small>Sem data de término</small>
                         </div>
                       </label>
+                      <div className="campaign-schedule-card campaign-full-field">
+                        <div className="campaign-schedule-heading">
+                          <span className="campaign-schedule-icon" aria-hidden="true"><CampaignModalIcon name="calendar" /></span>
+                          <div>
+                            <strong>Agenda de execução</strong>
+                            <p>Defina quando a automação deverá buscar o público dinâmico e realizar os disparos.</p>
+                          </div>
+                        </div>
+                        <div className="campaign-schedule-fields">
+                          <label>
+                            <span>Repetição</span>
+                            <select
+                              value={form.automacaoRepeticaoTipo}
+                              onChange={(event) => setForm({
+                                ...form,
+                                automacaoRepeticaoTipo: event.target.value as AutomacaoRepeticaoTipo,
+                                automacaoDiasSemana: event.target.value === "dias_semana" ? form.automacaoDiasSemana : [],
+                                automacaoMeses: event.target.value === "mensal" ? form.automacaoMeses : [],
+                              })}
+                            >
+                              <option value="diaria">Diariamente</option>
+                              <option value="dias_semana">Dias da semana</option>
+                              <option value="mensal">Meses específicos</option>
+                            </select>
+                          </label>
+                          <div className="campaign-schedule-timezone">
+                            <span>Fuso horário</span>
+                            <strong>Brasília</strong>
+                            <small>America/Sao_Paulo</small>
+                          </div>
+                        </div>
+                        {form.automacaoRepeticaoTipo === "dias_semana" && (
+                          <div className="campaign-schedule-options">
+                            <span>Dias da semana</span>
+                            <div>{diasSemanaAutomacao.map((dia, indice) => (
+                              <button className={form.automacaoDiasSemana.includes(indice) ? "selected" : ""} type="button" onClick={() => alternarItemAgenda("automacaoDiasSemana", indice)} key={dia}>{dia}</button>
+                            ))}</div>
+                          </div>
+                        )}
+                        {form.automacaoRepeticaoTipo === "mensal" && (
+                          <div className="campaign-schedule-options campaign-schedule-months">
+                            <span>Meses de execução</span>
+                            <div>{mesesAutomacao.map((mes, indice) => (
+                              <button className={form.automacaoMeses.includes(indice + 1) ? "selected" : ""} type="button" onClick={() => alternarItemAgenda("automacaoMeses", indice + 1)} key={mes}>{mes}</button>
+                            ))}</div>
+                          </div>
+                        )}
+                        <div className="campaign-schedule-times">
+                          <span>Horários de disparo</span>
+                          <div className="campaign-schedule-time-add">
+                            <input type="time" value={novoHorarioAutomacao} onChange={(event) => setNovoHorarioAutomacao(event.target.value)} />
+                            <button className="secondary-button" type="button" onClick={adicionarHorarioAutomacao}>Adicionar horário</button>
+                          </div>
+                          <div className="campaign-schedule-time-list">
+                            {form.automacaoHorarios.map((horario) => (
+                              <span key={horario}>{horario}<button type="button" onClick={() => removerHorarioAutomacao(horario)} aria-label={`Remover horário ${horario}`}>×</button></span>
+                            ))}
+                            {form.automacaoHorarios.length === 0 && <small>Nenhum horário adicionado.</small>}
+                          </div>
+                        </div>
+                      </div>
                     </>
                   )}
                   <label>
