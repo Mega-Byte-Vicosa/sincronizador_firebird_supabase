@@ -2222,40 +2222,46 @@ export function CampanhasPromocao() {
 
               {etapa === 4 && (
                 <section className="campaign-review-grid">
-                  <label>
-                    <span>Data e hora de criação</span>
-                    <input value={formatarDataHora(new Date().toISOString())} readOnly />
-                  </label>
-                  <label>
-                    <span>{form.automatizada ? "Início da automação" : "Data e hora de envio/agendamento"}</span>
-                    <input
-                      type="datetime-local"
-                      value={form.dataHoraAgendamento}
-                      onChange={(event) => setForm({ ...form, dataHoraAgendamento: event.target.value })}
-                    />
-                  </label>
+                  <div className="campaign-review-dates campaign-full-field">
+                    <label>
+                      <span>Data/Hora Criação</span>
+                      <input value={formatarDataHora(new Date().toISOString())} readOnly />
+                    </label>
+                    <label>
+                      <span>{form.automatizada ? "Início Automação" : "Data e hora de envio/agendamento"}</span>
+                      <input
+                        type="datetime-local"
+                        value={form.dataHoraAgendamento}
+                        onChange={(event) => setForm({ ...form, dataHoraAgendamento: event.target.value })}
+                      />
+                    </label>
+                    {form.automatizada && (
+                      <>
+                        <label>
+                          <span>Termina em</span>
+                          <input
+                            type="datetime-local"
+                            value={form.terminaEm}
+                            onChange={(event) => setForm({ ...form, terminaEm: event.target.value })}
+                            disabled={form.campanhaContinua}
+                          />
+                        </label>
+                        <label className="campaign-automation-continuous">
+                          <span>Campanha Contínua</span>
+                          <div>
+                            <input
+                              type="checkbox"
+                              checked={form.campanhaContinua}
+                              onChange={(event) => setForm({ ...form, campanhaContinua: event.target.checked, terminaEm: event.target.checked ? "" : form.terminaEm })}
+                            />
+                            <small>Sem Data Término</small>
+                          </div>
+                        </label>
+                      </>
+                    )}
+                  </div>
                   {form.automatizada && (
                     <>
-                      <label>
-                        <span>Termina em</span>
-                        <input
-                          type="datetime-local"
-                          value={form.terminaEm}
-                          onChange={(event) => setForm({ ...form, terminaEm: event.target.value })}
-                          disabled={form.campanhaContinua}
-                        />
-                      </label>
-                      <label className="campaign-automation-continuous">
-                        <span>Campanha contínua</span>
-                        <div>
-                          <input
-                            type="checkbox"
-                            checked={form.campanhaContinua}
-                            onChange={(event) => setForm({ ...form, campanhaContinua: event.target.checked, terminaEm: event.target.checked ? "" : form.terminaEm })}
-                          />
-                          <small>Sem data de término</small>
-                        </div>
-                      </label>
                       <div className="campaign-schedule-card campaign-full-field">
                         <div className="campaign-schedule-heading">
                           <span className="campaign-schedule-icon" aria-hidden="true"><CampaignModalIcon name="calendar" /></span>
@@ -2280,12 +2286,20 @@ export function CampanhasPromocao() {
                               <option value="dias_semana">Dias da semana</option>
                               <option value="mensal">Meses específicos</option>
                             </select>
-                          </label>
-                          <div className="campaign-schedule-timezone">
-                            <span>Fuso horário</span>
-                            <strong>Brasília</strong>
-                            <small>America/Sao_Paulo</small>
+                           </label>
+                          <div className="campaign-schedule-times">
+                            <span>Horários de Disparo</span>
+                            <div className="campaign-schedule-time-add">
+                              <input type="time" value={novoHorarioAutomacao} onChange={(event) => setNovoHorarioAutomacao(event.target.value)} />
+                              <button className="secondary-button" type="button" onClick={adicionarHorarioAutomacao}>Adicionar horário</button>
+                            </div>
                           </div>
+                        </div>
+                        <div className="campaign-schedule-time-list">
+                          {form.automacaoHorarios.map((horario) => (
+                            <span key={horario}>{horario}<button type="button" onClick={() => removerHorarioAutomacao(horario)} aria-label={`Remover horário ${horario}`}>×</button></span>
+                          ))}
+                          {form.automacaoHorarios.length === 0 && <small>Nenhum horário adicionado.</small>}
                         </div>
                         {form.automacaoRepeticaoTipo === "dias_semana" && (
                           <div className="campaign-schedule-options">
@@ -2303,19 +2317,6 @@ export function CampanhasPromocao() {
                             ))}</div>
                           </div>
                         )}
-                        <div className="campaign-schedule-times">
-                          <span>Horários de disparo</span>
-                          <div className="campaign-schedule-time-add">
-                            <input type="time" value={novoHorarioAutomacao} onChange={(event) => setNovoHorarioAutomacao(event.target.value)} />
-                            <button className="secondary-button" type="button" onClick={adicionarHorarioAutomacao}>Adicionar horário</button>
-                          </div>
-                          <div className="campaign-schedule-time-list">
-                            {form.automacaoHorarios.map((horario) => (
-                              <span key={horario}>{horario}<button type="button" onClick={() => removerHorarioAutomacao(horario)} aria-label={`Remover horário ${horario}`}>×</button></span>
-                            ))}
-                            {form.automacaoHorarios.length === 0 && <small>Nenhum horário adicionado.</small>}
-                          </div>
-                        </div>
                       </div>
                     </>
                   )}
