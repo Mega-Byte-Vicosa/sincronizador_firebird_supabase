@@ -1501,6 +1501,7 @@ export function CampanhasPromocao() {
 
           return {
             id_empresa: usuario.id_empresa,
+            tipo_envio: "campanha_promocao",
             origem_modulo: "CAMPANHA",
             id_origem: campanhaSalva.id,
             titulo: campanhaSalva.nome,

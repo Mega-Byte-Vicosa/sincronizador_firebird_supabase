@@ -2,6 +2,7 @@ import { sendBtzapMessage, validateBtzapConfig, type BtzapConfig } from "./btzap
 import { extrairDadosInstancia, montarEndpoint } from "./btzapInstance.ts";
 import { extrairMensagemIdExterno } from "./btzapMessageStatus.ts";
 import { createSupabaseAdmin } from "./supabaseAdmin.ts";
+import { processarEnvioWhatsApp } from "./whatsappSendGuard.ts";
 
 const LIMITE_ENVIOS_AUTOMACAO = 5;
 const TIME_ZONE = "America/Sao_Paulo";
@@ -471,11 +472,17 @@ export async function processarCampanhasAutomatizadas(
           };
           let responsePayload: unknown = null;
           try {
-            const result = await sendBtzapMessage(config, { phone: telefone, message: mensagem });
-            responsePayload = "retorno" in result ? result.retorno ?? null : null;
-            if (!result.success) throw new Error(result.message);
-            await registrarHistoricoConta(supabase, campanha, conta, telefone, mensagem, "enviado", null, requestPayload, responsePayload);
-            enviados++;
+            const protegido = await processarEnvioWhatsApp({
+              supabase, empresaId: campanha.id_empresa, tipoEnvio: "cobranca", clienteId: conta.id_cliente,
+              telefone, mensagem, origem: "AUTOMACAO", referenciaId: campanha.id,
+              enviarBtzap: async () => {
+                const result = await sendBtzapMessage(config, { phone: telefone, message: mensagem });
+                if (!result.success) throw new Error(result.message);
+                return "retorno" in result ? result.retorno ?? null : result;
+              },
+            });
+            responsePayload = protegido.retornoBtzap ?? null;
+            if (protegido.enviado) enviados++; else if (!protegido.temporario) erros++;
           } catch (sendError) {
             const message = sendError instanceof Error ? sendError.message : String(sendError);
             await registrarHistoricoConta(supabase, campanha, conta, telefone, mensagem, "erro", message, requestPayload, responsePayload);
@@ -528,11 +535,18 @@ export async function processarCampanhasAutomatizadas(
         const requestPayload = { phone: telefone, message: mensagem, ciclo_automacao: cliente.dt_ultcomp?.split("T")[0] ?? chaveData(hoje) };
         let responsePayload: unknown = null;
         try {
-          const result = await sendBtzapMessage(config, { phone: telefone, message: mensagem });
-          responsePayload = "retorno" in result ? result.retorno ?? null : null;
-          if (!result.success) throw new Error(result.message);
-          await registrarHistorico(supabase, campanha, cliente, telefone, mensagem, "enviado", null, requestPayload, responsePayload);
-          enviados++;
+          const tipoEnvio = campanha.tipo_automacao.startsWith("aniversariantes") ? "aniversario" : "campanha_promocao";
+          const protegido = await processarEnvioWhatsApp({
+            supabase, empresaId: campanha.id_empresa, tipoEnvio, clienteId: cliente.id_cliente,
+            telefone, mensagem, origem: "AUTOMACAO", referenciaId: campanha.id,
+            enviarBtzap: async () => {
+              const result = await sendBtzapMessage(config, { phone: telefone, message: mensagem });
+              if (!result.success) throw new Error(result.message);
+              return "retorno" in result ? result.retorno ?? null : result;
+            },
+          });
+          responsePayload = protegido.retornoBtzap ?? null;
+          if (protegido.enviado) enviados++; else if (!protegido.temporario) erros++;
         } catch (sendError) {
           const message = sendError instanceof Error ? sendError.message : String(sendError);
           await registrarHistorico(supabase, campanha, cliente, telefone, mensagem, "erro", message, requestPayload, responsePayload);

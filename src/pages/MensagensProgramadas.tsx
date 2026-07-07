@@ -411,6 +411,7 @@ function montarPayloadMensagemProgramada(form: FormMensagemProgramada, dataEnvio
   const recorrente = form.tipo_agendamento === "RECORRENTE" || form.repetir;
 
   return {
+    tipo_envio: form.origem_modulo === "CONTA_RECEBER" ? "cobranca" : form.origem_modulo === "CAMPANHA" ? "campanha_promocao" : "mensagem_programada",
     origem_modulo: form.origem_modulo,
     id_origem: form.id_origem.trim() || null,
     titulo: form.titulo.trim(),

@@ -1090,11 +1090,16 @@ export function ContasAReceber() {
 
     const { data, error } = await supabase.functions.invoke("btzap-send-message", {
       body: {
+        empresa_id: usuario?.id_empresa,
         id_empresa: usuario?.id_empresa,
         id_ctarec: revisaoWhatsapp.conta.id_ctarec,
         tipo_envio: revisaoWhatsapp.tipoEnvio,
+        categoria_envio: "cobranca",
+        cliente_id: revisaoWhatsapp.conta.id_cliente,
         telefone: telefoneEnvio,
         mensagem: revisaoWhatsapp.mensagem,
+        origem: "Contas a Receber",
+        referencia_id: revisaoWhatsapp.conta.id_ctarec,
       },
     });
 

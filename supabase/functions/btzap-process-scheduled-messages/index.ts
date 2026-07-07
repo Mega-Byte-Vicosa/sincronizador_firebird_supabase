@@ -5,6 +5,7 @@ import { extrairDadosInstancia, montarEndpoint } from "../_shared/btzapInstance.
 import { extrairMensagemIdExterno } from "../_shared/btzapMessageStatus.ts";
 import { createSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { processarCampanhasAutomatizadas } from "../_shared/campaignAutomations.ts";
+import { normalizarTipoEnvio, processarEnvioWhatsApp } from "../_shared/whatsappSendGuard.ts";
 
 const LIMITE_POR_EXECUCAO = 10;
 const INTERVALO_ENTRE_ENVIOS_MS = 5_000;
@@ -23,6 +24,7 @@ interface MensagemProgramada {
   enviado: boolean;
   ativo: boolean;
   tentativas_envio: number;
+  tipo_envio?: string | null;
 }
 
 function normalizarTextoErro(valor: unknown): string {
@@ -535,11 +537,41 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
         phone: telefone,
         message: conteudoParaEnvio,
       };
-      const result = await sendBtzapMessage(config, requestPayload);
-      responsePayload = "retorno" in result ? result.retorno ?? null : null;
-
-      if (!result.success) throw new Error(result.message);
-      const erroRetornoApi = obterErroRetornoApi(result.retorno);
+      const categoriaEnvio = normalizarTipoEnvio(
+        mensagem.tipo_envio || (mensagem.origem_modulo === "CONTA_RECEBER" ? "cobranca" : mensagem.origem_modulo === "CAMPANHA" ? "campanha_promocao" : "mensagem_programada"),
+      );
+      const envioProtegido = await processarEnvioWhatsApp({
+        supabase,
+        empresaId: mensagem.id_empresa,
+        tipoEnvio: categoriaEnvio,
+        telefone,
+        mensagem: conteudoParaEnvio,
+        origem: mensagem.origem_modulo,
+        referenciaId: mensagem.id_origem || mensagem.id_msg_programada,
+        tentativaAtual: Number(mensagem.tentativas_envio ?? 0),
+        enviarBtzap: async () => {
+          const result = await sendBtzapMessage(config, requestPayload!);
+          if (!result.success) throw new Error(result.message);
+          return "retorno" in result ? result.retorno ?? null : result;
+        },
+      });
+      if (!envioProtegido.enviado) {
+        const proxima = envioProtegido.proximaTentativaEm || new Date(Date.now() + 60_000).toISOString();
+        const { error: reagendarError } = await supabase.from("tb_msg_programadas").update({
+          status: envioProtegido.temporario ? "AGENDADO" : "ERRO",
+          enviado: false,
+          erro_envio: envioProtegido.motivo,
+          motivo_bloqueio: envioProtegido.motivo,
+          proxima_tentativa_em: proxima,
+          executar_em: envioProtegido.temporario ? proxima : mensagem.executar_em,
+          processando_em: null,
+        }).eq("id_empresa", mensagem.id_empresa).eq("id_msg_programada", mensagem.id_msg_programada);
+        if (reagendarError) throw reagendarError;
+        resultados.push({ id_msg_programada: mensagem.id_msg_programada, success: false, bloqueado: true, motivo: envioProtegido.motivo, proxima_tentativa_em: proxima });
+        continue;
+      }
+      responsePayload = envioProtegido.retornoBtzap;
+      const erroRetornoApi = obterErroRetornoApi(responsePayload);
       if (erroRetornoApi) throw new Error(erroRetornoApi);
 
       await atualizarMensagemComoEnviada(supabase, mensagem);
@@ -548,7 +580,7 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
 
       let erroHistorico: string | null = null;
       try {
-        await registrarHistoricoMensagemProgramada(supabase, mensagem, "enviado", null, requestPayload, responsePayload);
+        // O histórico de sucesso já foi gravado pelo guard central.
       } catch (error) {
         erroHistorico = normalizarTextoErro(error);
         await atualizarErroMensagemProgramada(

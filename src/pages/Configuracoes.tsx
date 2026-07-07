@@ -1,9 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../auth/AuthContext";
 import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
-
-const secoes = ["Mensagens automáticas", "Parâmetros de envio", "Manutenção da integração"];
 
 interface BtzapInstanceData {
   connected?: boolean;
@@ -36,6 +34,167 @@ interface BtzapConfigData {
   ultimo_connected: boolean | null;
   ultimo_logged_in: boolean | null;
   ultimo_qrcode_em: string | null;
+}
+
+type ParametroWhats = {
+  id: string; empresa_id: string; tipo_envio: string; descricao: string | null; ativo: boolean;
+  intervalo_min_segundos: number; intervalo_max_segundos: number; max_mensagens_por_minuto: number;
+  max_mensagens_por_dia_inicial: number | null; max_mensagens_por_dia_estavel: number | null; usar_limite_estavel: boolean;
+  horario_inicio: string | null; horario_fim: string | null; usar_janelas_envio: boolean;
+  janela_manha_inicio: string | null; janela_manha_fim: string | null; janela_tarde_inicio: string | null; janela_tarde_fim: string | null;
+  permite_segunda: boolean; permite_terca: boolean; permite_quarta: boolean; permite_quinta: boolean; permite_sexta: boolean;
+  permite_sabado: boolean; permite_domingo: boolean; enviar_feriado: boolean; max_tentativas_reenvio: number;
+  intervalo_primeira_tentativa_horas: number | null; intervalo_segunda_tentativa_horas: number | null;
+  intervalo_reenvio_min_horas: number | null; intervalo_reenvio_max_horas: number | null; frequencia_minima_cliente_dias: number | null;
+};
+
+const PARAMETRO_LABELS: Record<string, string> = {
+  geral: "Geral", cobranca: "Cobrança", campanha_promocao: "Campanhas",
+  aniversario: "Aniversário", mensagem_programada: "Programadas",
+};
+
+const PARAMETRO_DESCRICOES: Record<string, string> = {
+  geral: "Regra padrão usada quando não houver parâmetro específico.",
+  cobranca: "Usado para contas a receber, vencidos e lembretes.",
+  campanha_promocao: "Usado para promoções, marketing e públicos filtrados.",
+  aniversario: "Usado para mensagens automáticas de aniversário.",
+  mensagem_programada: "Usado para mensagens agendadas manualmente.",
+};
+
+const PARAMETROS_PADRAO: Record<string, Partial<ParametroWhats>> = {
+  geral: { ativo: true, intervalo_min_segundos: 45, intervalo_max_segundos: 90, max_mensagens_por_minuto: 1, max_mensagens_por_dia_inicial: 50, max_mensagens_por_dia_estavel: 100, usar_limite_estavel: false, horario_inicio: "08:00", horario_fim: "18:00", usar_janelas_envio: false, permite_segunda: true, permite_terca: true, permite_quarta: true, permite_quinta: true, permite_sexta: true, permite_sabado: false, permite_domingo: false, enviar_feriado: false, max_tentativas_reenvio: 2, intervalo_primeira_tentativa_horas: 2, intervalo_segunda_tentativa_horas: 24, intervalo_reenvio_min_horas: null, intervalo_reenvio_max_horas: null, frequencia_minima_cliente_dias: 1 },
+  cobranca: { ativo: true, intervalo_min_segundos: 30, intervalo_max_segundos: 60, max_mensagens_por_minuto: 2, max_mensagens_por_dia_inicial: 50, max_mensagens_por_dia_estavel: 100, usar_limite_estavel: false, horario_inicio: "08:00", horario_fim: "18:00", usar_janelas_envio: false, permite_segunda: true, permite_terca: true, permite_quarta: true, permite_quinta: true, permite_sexta: true, permite_sabado: false, permite_domingo: false, enviar_feriado: false, max_tentativas_reenvio: 2, intervalo_primeira_tentativa_horas: 2, intervalo_segunda_tentativa_horas: 24, intervalo_reenvio_min_horas: null, intervalo_reenvio_max_horas: null, frequencia_minima_cliente_dias: 1 },
+  campanha_promocao: { ativo: true, intervalo_min_segundos: 60, intervalo_max_segundos: 120, max_mensagens_por_minuto: 1, max_mensagens_por_dia_inicial: 30, max_mensagens_por_dia_estavel: 100, usar_limite_estavel: false, horario_inicio: null, horario_fim: null, usar_janelas_envio: true, janela_manha_inicio: "09:00", janela_manha_fim: "11:30", janela_tarde_inicio: "14:00", janela_tarde_fim: "17:30", permite_segunda: true, permite_terca: true, permite_quarta: true, permite_quinta: true, permite_sexta: true, permite_sabado: false, permite_domingo: false, enviar_feriado: false, max_tentativas_reenvio: 1, intervalo_primeira_tentativa_horas: null, intervalo_segunda_tentativa_horas: null, intervalo_reenvio_min_horas: 24, intervalo_reenvio_max_horas: 48, frequencia_minima_cliente_dias: 7 },
+  aniversario: { ativo: true, intervalo_min_segundos: 45, intervalo_max_segundos: 90, max_mensagens_por_minuto: 1, max_mensagens_por_dia_inicial: 50, max_mensagens_por_dia_estavel: 100, usar_limite_estavel: false, horario_inicio: "08:00", horario_fim: "18:00", usar_janelas_envio: false, permite_segunda: true, permite_terca: true, permite_quarta: true, permite_quinta: true, permite_sexta: true, permite_sabado: false, permite_domingo: false, enviar_feriado: false, max_tentativas_reenvio: 1, intervalo_primeira_tentativa_horas: 24, intervalo_segunda_tentativa_horas: null, intervalo_reenvio_min_horas: null, intervalo_reenvio_max_horas: null, frequencia_minima_cliente_dias: 1 },
+  mensagem_programada: { ativo: true, intervalo_min_segundos: 45, intervalo_max_segundos: 90, max_mensagens_por_minuto: 1, max_mensagens_por_dia_inicial: 50, max_mensagens_por_dia_estavel: 100, usar_limite_estavel: false, horario_inicio: "08:00", horario_fim: "18:00", usar_janelas_envio: false, permite_segunda: true, permite_terca: true, permite_quarta: true, permite_quinta: true, permite_sexta: true, permite_sabado: false, permite_domingo: false, enviar_feriado: false, max_tentativas_reenvio: 2, intervalo_primeira_tentativa_horas: 2, intervalo_segunda_tentativa_horas: 24, intervalo_reenvio_min_horas: null, intervalo_reenvio_max_horas: null, frequencia_minima_cliente_dias: 1 },
+};
+
+function ParametrosWhatsForm({ empresaId }: { empresaId: string }) {
+  const [itens, setItens] = useState<ParametroWhats[]>([]);
+  const [tipo, setTipo] = useState("geral");
+  const [carregando, setCarregando] = useState(true);
+  const [salvando, setSalvando] = useState(false);
+  const [feedback, setFeedback] = useState<{ erro: boolean; texto: string } | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      setCarregando(true);
+      const token = sessionStorage.getItem("consulta_clipp_pro_saas_session") ?? "";
+      const { data, error } = await supabase.rpc("fn_listar_parametros_whats", { p_token: token });
+      if (!ativo) return;
+      setFeedback(error ? { erro: true, texto: `Não foi possível carregar os parâmetros: ${error.message}` } : null);
+      setItens((data ?? []) as ParametroWhats[]); setCarregando(false);
+    })();
+    return () => { ativo = false; };
+  }, [empresaId]);
+
+  const atual = itens.find((item) => item.tipo_envio === tipo);
+  const alterar = (campo: keyof ParametroWhats, valor: unknown) => setItens((lista) => lista.map((item) => item.tipo_envio === tipo ? { ...item, [campo]: valor } : item));
+  const numero = (campo: keyof ParametroWhats, permiteNulo = false) => (event: ChangeEvent<HTMLInputElement>) => {
+    const valor = event.target.value; alterar(campo, permiteNulo && valor === "" ? null : Number(valor));
+  };
+  function restaurarPadrao() {
+    const padrao = PARAMETROS_PADRAO[tipo];
+    setItens((lista) => lista.map((item) => item.tipo_envio === tipo ? { ...item, ...padrao } : item));
+    setFeedback({ erro: false, texto: "Padrão recomendado preenchido. Clique em Salvar parâmetros para aplicar." });
+  }
+  async function salvar() {
+    if (!atual) return;
+    if (atual.intervalo_min_segundos > atual.intervalo_max_segundos) return setFeedback({ erro: true, texto: "O intervalo mínimo não pode ser maior que o máximo." });
+    if (atual.max_mensagens_por_minuto < 1) return setFeedback({ erro: true, texto: "O máximo por minuto deve ser pelo menos 1." });
+    const numericos = Object.entries(atual).filter(([chave]) => /intervalo|max_mensagens|frequencia/.test(chave));
+    if (numericos.some(([, valor]) => valor != null && Number(valor) < 0)) return setFeedback({ erro: true, texto: "Os valores não podem ser negativos." });
+    if (!atual.usar_janelas_envio && (!atual.horario_inicio || !atual.horario_fim)) return setFeedback({ erro: true, texto: "Informe o horário inicial e final." });
+    if (!atual.usar_janelas_envio && atual.horario_inicio! >= atual.horario_fim!) return setFeedback({ erro: true, texto: "O horário inicial deve ser anterior ao horário final." });
+    if (atual.usar_janelas_envio && (!atual.janela_manha_inicio || !atual.janela_manha_fim || !atual.janela_tarde_inicio || !atual.janela_tarde_fim)) return setFeedback({ erro: true, texto: "Informe todas as janelas de envio." });
+    if (tipo === "campanha_promocao" && Number(atual.frequencia_minima_cliente_dias) < 7) return setFeedback({ erro: true, texto: "Campanhas devem manter frequência mínima de 7 dias por cliente." });
+    if (tipo === "campanha_promocao" && (atual.permite_sabado || atual.permite_domingo)) return setFeedback({ erro: true, texto: "Por segurança, campanhas não devem habilitar sábado ou domingo." });
+    setSalvando(true); setFeedback(null);
+    const { id: _id, empresa_id: _empresa, tipo_envio: _tipo, descricao: _descricao, ...dados } = atual;
+    const token = sessionStorage.getItem("consulta_clipp_pro_saas_session") ?? "";
+    const { error } = await supabase.rpc("fn_salvar_parametro_whats", { p_token: token, p_tipo_envio: tipo, p_dados: dados });
+    setSalvando(false); setFeedback(error ? { erro: true, texto: error.message } : { erro: false, texto: "Parâmetros salvos com sucesso." });
+  }
+  if (carregando) return <article className="settings-card settings-whatsapp-parameters"><h2>Parâmetros de envio</h2><p>Carregando parâmetros...</p></article>;
+  if (!atual) return <article className="settings-card settings-whatsapp-parameters"><h2>Parâmetros de envio</h2><p>Nenhum parâmetro disponível para esta empresa.</p></article>;
+  const dias = [["permite_segunda","Seg"],["permite_terca","Ter"],["permite_quarta","Qua"],["permite_quinta","Qui"],["permite_sexta","Sex"],["permite_sabado","Sáb"],["permite_domingo","Dom"]] as const;
+  const horarioResumo = atual.usar_janelas_envio
+    ? `${atual.janela_manha_inicio?.slice(0,5) ?? "-"}–${atual.janela_manha_fim?.slice(0,5) ?? "-"} / ${atual.janela_tarde_inicio?.slice(0,5) ?? "-"}–${atual.janela_tarde_fim?.slice(0,5) ?? "-"}`
+    : `${atual.horario_inicio?.slice(0,5) ?? "-"}–${atual.horario_fim?.slice(0,5) ?? "-"}`;
+  const fimSemanaAtivo = atual.permite_sabado || atual.permite_domingo || atual.enviar_feriado;
+  const alertaCampanhaFrequencia = tipo === "campanha_promocao" && Number(atual.frequencia_minima_cliente_dias) < 7;
+  const alertaCampanhaReenvio = tipo === "campanha_promocao" && atual.max_tentativas_reenvio > 1;
+  const Field = ({ label, campo, min = 0, nulo = true }: { label: string; campo: keyof ParametroWhats; min?: number; nulo?: boolean }) => <label className="parameter-field"><span>{label}</span><input type="number" min={min} value={(atual[campo] as number | null) ?? ""} onChange={numero(campo, nulo)} /></label>;
+  return <article className="settings-card settings-whatsapp-parameters">
+    <header className="settings-parameter-header">
+      <div><h2>Parâmetros de envio WhatsApp</h2><p>Controle os limites, horários, reenvios e segurança dos envios antes do disparo ao BTZap.</p></div>
+      <span className="settings-protection-badge">Proteção ativa antes do BTZap</span>
+    </header>
+    <p className="settings-parameters-notice">Esses parâmetros são aplicados automaticamente a todos os envios de WhatsApp antes do envio ao BTZap.</p>
+    <nav className="settings-parameter-tabs" aria-label="Tipos de envio">{Object.entries(PARAMETRO_LABELS).map(([id,label]) => <button type="button" className={tipo === id ? "active" : ""} onClick={() => { setTipo(id); setFeedback(null); }} key={id}><strong>{label}</strong><small>{PARAMETRO_DESCRICOES[id]}</small></button>)}</nav>
+
+    <div className="settings-parameter-summary-grid">
+      {[['Intervalo', `${atual.intervalo_min_segundos}–${atual.intervalo_max_segundos}s`, 'Tempo aleatório entre mensagens'], ['Limite/min', `${atual.max_mensagens_por_minuto}/min`, 'Máximo por minuto'], ['Limite diário', `${atual.usar_limite_estavel ? atual.max_mensagens_por_dia_estavel : atual.max_mensagens_por_dia_inicial}/dia`, 'Controle diário de envios'], ['Frequência', `${atual.frequencia_minima_cliente_dias ?? 0} dia(s)`, 'Intervalo por cliente'], ['Horário', horarioResumo, 'Janela permitida'], ['Feriados', atual.enviar_feriado ? 'Permitido' : 'Bloqueado', 'Envio em feriados']].map(([titulo,valor,descricao]) => <div className="settings-parameter-summary-card" key={titulo}><span>{titulo}</span><strong>{valor}</strong><small>{descricao}</small></div>)}
+    </div>
+
+    <div className="settings-parameter-sections">
+      <section className="settings-parameter-section parameter-status-section">
+        <div className="parameter-section-heading"><h3>Status do parâmetro</h3><p>Defina se esta regra específica poderá ser usada.</p></div>
+        <label className="parameter-switch"><input type="checkbox" checked={atual.ativo} onChange={(e) => alterar("ativo", e.target.checked)} /><span className="parameter-switch-track" /><span><strong>Parâmetro {atual.ativo ? "ativo" : "inativo"}</strong><small>{atual.ativo ? "Este parâmetro será usado nos envios deste tipo." : "O sistema tentará usar o parâmetro Geral."}</small></span></label>
+      </section>
+
+      <section className="settings-parameter-section">
+        <div className="parameter-section-heading"><h3>Ritmo e limites de envio</h3><p>O intervalo é sorteado aleatoriamente entre o mínimo e o máximo para evitar comportamento robótico.</p></div>
+        <div className="parameter-fields-grid">
+          <Field label="Intervalo mínimo (segundos)" campo="intervalo_min_segundos" nulo={false} />
+          <Field label="Intervalo máximo (segundos)" campo="intervalo_max_segundos" nulo={false} />
+          <Field label="Máximo por minuto" campo="max_mensagens_por_minuto" min={1} nulo={false} />
+          <Field label="Máximo diário inicial" campo="max_mensagens_por_dia_inicial" />
+          <Field label="Máximo diário estável" campo="max_mensagens_por_dia_estavel" />
+          <label className="parameter-switch compact"><input type="checkbox" checked={atual.usar_limite_estavel} onChange={(e) => alterar("usar_limite_estavel", e.target.checked)} /><span className="parameter-switch-track" /><span><strong>Usar limite estável</strong><small>Aplica o limite diário estável.</small></span></label>
+        </div>
+        {atual.intervalo_min_segundos > atual.intervalo_max_segundos && <p className="parameter-inline-error">O intervalo mínimo não pode ser maior que o máximo.</p>}
+      </section>
+
+      <section className="settings-parameter-section">
+        <div className="parameter-section-heading"><h3>Horários permitidos</h3><p>Fora desses horários, a mensagem não será enviada ao BTZap e ficará aguardando nova tentativa.</p></div>
+        <label className="parameter-switch compact"><input type="checkbox" checked={atual.usar_janelas_envio} onChange={(e) => alterar("usar_janelas_envio", e.target.checked)} /><span className="parameter-switch-track" /><span><strong>Usar janelas de envio</strong><small>Separe os disparos entre manhã e tarde.</small></span></label>
+        <div className="parameter-fields-grid time-grid">{!atual.usar_janelas_envio ? <>
+          <label className="parameter-field"><span>Horário inicial</span><input type="time" value={atual.horario_inicio?.slice(0,5) ?? ""} onChange={(e) => alterar("horario_inicio", e.target.value)} /></label>
+          <label className="parameter-field"><span>Horário final</span><input type="time" value={atual.horario_fim?.slice(0,5) ?? ""} onChange={(e) => alterar("horario_fim", e.target.value)} /></label>
+        </> : <>
+          <label className="parameter-field"><span>Manhã — início</span><input type="time" value={atual.janela_manha_inicio?.slice(0,5) ?? ""} onChange={(e) => alterar("janela_manha_inicio", e.target.value)} /></label>
+          <label className="parameter-field"><span>Manhã — fim</span><input type="time" value={atual.janela_manha_fim?.slice(0,5) ?? ""} onChange={(e) => alterar("janela_manha_fim", e.target.value)} /></label>
+          <label className="parameter-field"><span>Tarde — início</span><input type="time" value={atual.janela_tarde_inicio?.slice(0,5) ?? ""} onChange={(e) => alterar("janela_tarde_inicio", e.target.value)} /></label>
+          <label className="parameter-field"><span>Tarde — fim</span><input type="time" value={atual.janela_tarde_fim?.slice(0,5) ?? ""} onChange={(e) => alterar("janela_tarde_fim", e.target.value)} /></label>
+        </>}</div>
+      </section>
+
+      <section className="settings-parameter-section">
+        <div className="parameter-section-heading"><h3>Dias permitidos</h3><p>Selecione em quais dias os envios podem ser processados.</p></div>
+        <div className="settings-parameter-days">{dias.map(([campo,label]) => <label className={atual[campo] ? "selected" : ""} key={campo}><input type="checkbox" checked={atual[campo]} onChange={(e) => alterar(campo, e.target.checked)} /><span>{label}</span></label>)}</div>
+        <label className="parameter-switch compact holiday-switch"><input type="checkbox" checked={atual.enviar_feriado} onChange={(e) => alterar("enviar_feriado", e.target.checked)} /><span className="parameter-switch-track" /><span><strong>Enviar em feriados</strong><small>{atual.enviar_feriado ? "Permitido" : "Bloqueado"}</small></span></label>
+        {fimSemanaAtivo && <p className="parameter-warning">Atenção: envios em finais de semana ou feriados podem aumentar o risco de bloqueio ou reclamação.</p>}
+      </section>
+
+      <section className="settings-parameter-section">
+        <div className="parameter-section-heading"><h3>Reenvio e frequência</h3><p>Reenvios são usados apenas para erro técnico, nunca para opt-out, número inválido ou cliente sem permissão.</p></div>
+        <div className="parameter-fields-grid">
+          <Field label="Máximo de reenvios" campo="max_tentativas_reenvio" nulo={false} />
+          <Field label="Primeira tentativa (horas)" campo="intervalo_primeira_tentativa_horas" />
+          <Field label="Segunda tentativa (horas)" campo="intervalo_segunda_tentativa_horas" />
+          <Field label="Reenvio mínimo (horas)" campo="intervalo_reenvio_min_horas" />
+          <Field label="Reenvio máximo (horas)" campo="intervalo_reenvio_max_horas" />
+          <Field label="Frequência por cliente (dias)" campo="frequencia_minima_cliente_dias" />
+        </div>
+        {alertaCampanhaFrequencia && <p className="parameter-warning">Recomendado manter campanhas com no mínimo 7 dias por cliente.</p>}
+        {alertaCampanhaReenvio && <p className="parameter-warning">Campanhas devem ter no máximo 1 reenvio automático.</p>}
+      </section>
+    </div>
+    {feedback && <div className={`feedback-box ${feedback.erro ? "feedback-error" : "feedback-success"}`}>{feedback.texto}</div>}
+    <footer className="settings-parameter-actions"><span>As alterações serão aplicadas nos próximos envios.</span><div><button className="secondary-button" type="button" onClick={restaurarPadrao} disabled={salvando}>Restaurar padrão recomendado</button><button className="primary-button" type="button" onClick={salvar} disabled={salvando}>{salvando ? "Salvando..." : "Salvar parâmetros"}</button></div></footer>
+  </article>;
 }
 
 function TokenFieldIcon({ name }: { name: "eye" | "eyeOff" | "copy" }) {
@@ -784,12 +943,7 @@ export function Configuracoes() {
       </section>
 
       <section className="settings-grid">
-        {secoes.map((secao) => (
-          <article className="settings-card" key={secao}>
-            <h2>{secao}</h2>
-            <p>Área reservada para configuração futura.</p>
-          </article>
-        ))}
+        {usuario?.id_empresa && <ParametrosWhatsForm empresaId={usuario.id_empresa} />}
       </section>
     </main>
   );
