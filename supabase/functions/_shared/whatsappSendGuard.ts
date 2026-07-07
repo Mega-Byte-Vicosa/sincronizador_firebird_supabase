@@ -126,9 +126,10 @@ export async function validarParametrosEnvioWhats(args: Omit<ProcessarEnvioArgs,
 }
 
 async function registrar(args: Omit<ProcessarEnvioArgs, "enviarBtzap">, validacao: any, status: string, erro?: string | null, retorno?: unknown) {
+  const statusHistorico = status === "enviado" ? "enviado" : "erro";
   const payload = {
     id_empresa: args.empresaId, cliente_id: args.clienteId == null ? null : String(args.clienteId), cliente_telefone: args.telefone,
-    origem: args.origem || "WhatsApp", mensagem: args.mensagem, status, tipo_envio: "envio", categoria_envio: normalizarTipoEnvio(args.tipoEnvio),
+    origem: args.origem || "WhatsApp", mensagem: args.mensagem, status: statusHistorico, tipo_envio: "envio", categoria_envio: normalizarTipoEnvio(args.tipoEnvio),
     provider: "btzap", erro: erro ?? null, motivo_bloqueio: validacao.motivo ?? null, proxima_tentativa_em: validacao.proximaTentativaEm ?? null,
     tentativas: args.tentativaAtual ?? 0, parametro_whats_id: validacao.parametroId ?? null, intervalo_sorteado_segundos: validacao.intervaloSorteadoSegundos ?? null,
     processado_em: status === "enviado" ? new Date().toISOString() : null, enviado_em: status === "enviado" ? new Date().toISOString() : null,

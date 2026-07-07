@@ -423,6 +423,24 @@ function hojeISO(): string {
   return `${ano}-${mes}-${dia}`;
 }
 
+async function detalharErroEdgeFunction(error: unknown) {
+  const erro = error as { message?: string; context?: unknown; name?: string } | null;
+  const partes = [erro?.message || "Falha ao chamar a Edge Function."];
+  const context = erro?.context;
+  if (context instanceof Response) {
+    partes.push(`HTTP ${context.status}${context.statusText ? ` ${context.statusText}` : ""}`);
+    try {
+      const corpo = await context.clone().text();
+      if (corpo) partes.push(montarMensagemErroWhatsapp(corpo));
+    } catch {
+      // Mantém ao menos status e mensagem original.
+    }
+  } else if (context) {
+    partes.push(transformarErroEmTexto(context));
+  }
+  return [...new Set(partes.filter(Boolean))].join(" | ");
+}
+
 function formatarDataInput(data: Date) {
   const ano = data.getFullYear();
   const mes = String(data.getMonth() + 1).padStart(2, "0");
@@ -1091,24 +1109,24 @@ export function ContasAReceber() {
     const { data, error } = await supabase.functions.invoke("btzap-send-message", {
       body: {
         empresa_id: usuario?.id_empresa,
-        id_empresa: usuario?.id_empresa,
         id_ctarec: revisaoWhatsapp.conta.id_ctarec,
-        tipo_envio: revisaoWhatsapp.tipoEnvio,
-        categoria_envio: "cobranca",
+        tipo_envio: "cobranca",
+        operacao_envio: revisaoWhatsapp.tipoEnvio,
         cliente_id: revisaoWhatsapp.conta.id_cliente,
         telefone: telefoneEnvio,
         mensagem: revisaoWhatsapp.mensagem,
-        origem: "Contas a Receber",
+        origem: "contas_a_receber",
         referencia_id: revisaoWhatsapp.conta.id_ctarec,
       },
     });
 
     if (error) {
-      console.error("Erro invoke btzap-send-message:", error);
+      const detalhe = await detalharErroEdgeFunction(error);
+      console.error("Erro invoke btzap-send-message:", error, detalhe);
       setRevisaoWhatsapp({
         ...revisaoWhatsapp,
         enviando: false,
-        erro: `Erro ao chamar Edge Function btzap-send-message: ${error.message}`,
+        erro: `Erro na Edge Function btzap-send-message: ${detalhe}. Verifique o deploy e os logs da função se o problema continuar.`,
       });
       return;
     }

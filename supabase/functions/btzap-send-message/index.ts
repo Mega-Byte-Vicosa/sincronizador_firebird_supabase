@@ -10,11 +10,30 @@ function telefoneNormalizado(valor: unknown) {
   return (digitos.length === 12 || digitos.length === 13) && digitos.startsWith("55") ? digitos : null;
 }
 
+function mensagemBloqueio(motivo: unknown) {
+  const mensagens: Record<string, string> = {
+    bloqueado_fora_horario: "Envio bloqueado fora do horário permitido.",
+    aguardando_horario_permitido: "Envio aguardando a próxima janela permitida.",
+    bloqueado_limite_diario: "Envio bloqueado porque o limite diário foi atingido.",
+    bloqueado_limite_minuto: "Envio aguardando o limite por minuto.",
+    bloqueado_frequencia_cliente: "Envio bloqueado pela frequência mínima do cliente.",
+    bloqueado_feriado: "Envio bloqueado em feriado.",
+    bloqueado_dia_nao_permitido: "Envio bloqueado em dia não permitido.",
+    aguardando_intervalo: "Envio aguardando o intervalo de segurança entre mensagens.",
+    falha_sem_parametro_whats: "Nenhum parâmetro WhatsApp ativo foi encontrado para esta empresa.",
+  };
+  return mensagens[String(motivo)] || "Envio aguardando uma regra permitida.";
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ success: false, message: "Método não permitido." }, 405);
-  const supabase = createSupabaseAdmin();
   try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!supabaseUrl) throw new Error("Variável de ambiente SUPABASE_URL não configurada.");
+    if (!serviceRoleKey) throw new Error("Variável de ambiente SUPABASE_SERVICE_ROLE_KEY não configurada.");
+    const supabase = createSupabaseAdmin();
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const empresaId = String(body.empresa_id || body.id_empresa || body.idEmpresa || "").trim();
     const idCtarec = Number(body.id_ctarec || 0) || null;
@@ -22,7 +41,8 @@ Deno.serve(async (req) => {
     let telefone = telefoneNormalizado(body.telefone);
     let mensagem = String(body.mensagem ?? "").trim();
     const tipoEnvio = normalizarTipoEnvio(String(body.categoria_envio || body.tipo_envio || (idCtarec ? "cobranca" : "geral")));
-    const tentativaAtual = Number(body.tentativa_atual ?? (body.tipo_envio === "reenvio" ? 1 : 0));
+    const operacaoEnvio = String(body.operacao_envio || "envio");
+    const tentativaAtual = Number(body.tentativa_atual ?? (operacaoEnvio === "reenvio" ? 1 : 0));
     let conta: Record<string, any> | null = null;
 
     if (!empresaId) return jsonResponse({ success: false, message: "Empresa da sessão não identificada." }, 400);
@@ -57,10 +77,10 @@ Deno.serve(async (req) => {
       },
     });
 
-    if (!resultado.enviado) return jsonResponse({ success: false, bloqueado: true, motivo: resultado.motivo, proxima_tentativa_em: resultado.proximaTentativaEm, message: resultado.motivo === "erro_btzap" ? resultado.detalhe : "Envio aguardando uma regra permitida." });
+    if (!resultado.enviado) return jsonResponse({ success: false, bloqueado: true, motivo: resultado.motivo, proximaTentativaEm: resultado.proximaTentativaEm, proxima_tentativa_em: resultado.proximaTentativaEm, message: resultado.motivo === "erro_btzap" ? resultado.detalhe : mensagemBloqueio(resultado.motivo) });
     if (conta && idCtarec) {
       const agora = new Date().toISOString();
-      const reenvio = String(body.tipo_envio) === "reenvio";
+      const reenvio = operacaoEnvio === "reenvio";
       const total = Number(conta.whatsapp_total_envios ?? 0) + 1;
       const reenvios = Number(conta.whatsapp_total_reenvios ?? 0) + (reenvio ? 1 : 0);
       await supabase.from("firebird_contas_receber").update({
@@ -72,6 +92,7 @@ Deno.serve(async (req) => {
     }
     return jsonResponse({ success: true, message: "Mensagem enviada com sucesso.", envio_id: resultado.historicoId });
   } catch (error) {
-    return jsonResponse({ success: false, message: "Não foi possível enviar a mensagem WhatsApp.", detail: textoErro(error) }, 500);
+    const detail = textoErro(error);
+    return jsonResponse({ success: false, message: "A Edge Function não conseguiu processar a solicitação.", error: detail, detail, details: detail }, 500);
   }
 });
