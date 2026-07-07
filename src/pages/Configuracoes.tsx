@@ -28,6 +28,7 @@ interface BtzapConfigData {
   endpoint_envio_texto: string | null;
   metodo_envio_texto: string | null;
   formato_payload: string | null;
+  token_instancia: string | null;
   ultimo_status_instancia: string | null;
   ultimo_status_em: string | null;
   ultimo_profile_name: string | null;
@@ -35,6 +36,12 @@ interface BtzapConfigData {
   ultimo_connected: boolean | null;
   ultimo_logged_in: boolean | null;
   ultimo_qrcode_em: string | null;
+}
+
+function TokenFieldIcon({ name }: { name: "eye" | "eyeOff" | "copy" }) {
+  if (name === "copy") return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>;
+  if (name === "eyeOff") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 4.2A10.6 10.6 0 0 1 12 4c6 0 9 8 9 8a15.4 15.4 0 0 1-2.1 3.2M6.6 6.6C4.2 8.1 3 12 3 12s3 8 9 8a9.8 9.8 0 0 0 4.1-.9" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3-8 9-8 9 8 9 8-3 8-9 8-9-8-9-8Z" /><circle cx="12" cy="12" r="3" /></svg>;
 }
 
 function formatarDataHora(valor: string | null | undefined) {
@@ -68,6 +75,14 @@ function isInstanciaConectada(data: BtzapInstanceData | null) {
       data?.loggedIn === true ||
       isStatusConectado(data?.status)
   );
+}
+
+function formatarStatusSalvoWhatsapp(status: string | null | undefined) {
+  const valor = String(status ?? "").trim().toLowerCase();
+  if (["connected", "open", "conectado"].includes(valor)) return "Conectado";
+  if (["connecting", "conectando"].includes(valor)) return "Conectando";
+  if (["disconnected", "close", "closed", "desconectado"].includes(valor)) return "Desconectado";
+  return status || "-";
 }
 
 function existeStatusSalvo(config: BtzapConfigData | null) {
@@ -154,6 +169,7 @@ export function Configuracoes() {
   const [metodoEnvioTexto, setMetodoEnvioTexto] = useState("POST");
   const [formatoPayload, setFormatoPayload] = useState("btzap");
   const [tokenInstancia, setTokenInstancia] = useState("");
+  const [mostrarToken, setMostrarToken] = useState(false);
   const [ativo, setAtivo] = useState(true);
   const [configEncontrada, setConfigEncontrada] = useState(false);
 
@@ -237,15 +253,13 @@ export function Configuracoes() {
   const config = data.config as BtzapConfigData;
   setConfigEncontrada(true);
 
-  console.log("Configuração BTZap carregada pela Edge:", config);
-
   setNomeInstancia(config.nome_instancia ?? "");
   setUrlServidor(config.url_servidor ?? "");
   setEndpointEnvioTexto(config.endpoint_envio_texto ?? "/send/text");
   setMetodoEnvioTexto(config.metodo_envio_texto ?? "POST");
   setFormatoPayload(config.formato_payload ?? "btzap");
   setAtivo(config.ativo !== false);
-  setTokenInstancia("");
+  setTokenInstancia(config.token_instancia ?? "");
 
   const dadosSalvos = montarStatusSalvoWhatsapp(config);
 
@@ -296,9 +310,23 @@ export function Configuracoes() {
       return;
     }
 
-    setTokenInstancia("");
     setMensagem(data?.message ?? "Configurações salvas com sucesso.");
     await carregarConfiguracoes();
+  }
+
+  async function copiarTokenInstancia() {
+    setMensagem(null);
+    setErro(null);
+    if (!tokenInstancia.trim()) {
+      setErro("Nenhum token para copiar.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(tokenInstancia);
+      setMensagem("Token copiado com sucesso.");
+    } catch {
+      setErro("Não foi possível copiar o token.");
+    }
   }
 
   async function testarConexao() {
@@ -350,7 +378,7 @@ export function Configuracoes() {
     }
 
     if (isInstanciaConectada(data)) {
-      return "WhatsApp conectado";
+      return "WhatsApp Conectado";
     }
 
     if (data.qrcode) {
@@ -358,14 +386,22 @@ export function Configuracoes() {
     }
 
     if (data.status || data.lastStatusAt) {
-      return "WhatsApp desconectado";
+      return "WhatsApp Desconectado";
     }
 
     return "Status ainda não consultado";
   }
 
   function atualizarDadosInstancia(data: BtzapInstanceData, mensagemPadrao?: string) {
-    const dadosAtualizados = mapFunctionToInstanceData(data);
+    const dadosRecebidos = mapFunctionToInstanceData(data);
+    const dadosAnteriores = dadosInstanciaAtualRef.current;
+    const conectado = isInstanciaConectada(dadosRecebidos);
+    const dadosAtualizados: BtzapInstanceData = {
+      ...dadosRecebidos,
+      qrcode: conectado ? null : dadosRecebidos.qrcode || dadosAnteriores?.qrcode || null,
+      paircode: conectado ? null : dadosRecebidos.paircode || dadosAnteriores?.paircode || null,
+      lastQrCodeAt: dadosRecebidos.lastQrCodeAt || dadosAnteriores?.lastQrCodeAt || null,
+    };
 
     definirDadosInstancia(dadosAtualizados);
     setMensagemInstancia(getMensagemStatusInstancia(dadosAtualizados) || mensagemPadrao || null);
@@ -419,7 +455,6 @@ export function Configuracoes() {
       setPollingAtivo(true);
     }
 
-    await carregarConfiguracoes();
   }
 
   async function atualizarStatusInstancia(silencioso = false) {
@@ -472,7 +507,6 @@ export function Configuracoes() {
       );
     }
 
-    await carregarConfiguracoes();
   }
 
   useEffect(() => {
@@ -532,14 +566,25 @@ export function Configuracoes() {
 
           <label>
             <span>Token da Instância</span>
-            <input
-              type="password"
-              placeholder="digite aqui"
-              value={tokenInstancia}
-              onChange={(event) => setTokenInstancia(event.target.value)}
-            />
+            <div className="btzap-token-field">
+              <input
+                type={mostrarToken ? "text" : "password"}
+                placeholder="digite aqui"
+                value={tokenInstancia}
+                onChange={(event) => setTokenInstancia(event.target.value)}
+                autoComplete="off"
+              />
+              <div className="btzap-token-actions">
+                <button type="button" title={mostrarToken ? "Ocultar token" : "Visualizar token"} aria-label={mostrarToken ? "Ocultar token" : "Visualizar token"} onClick={() => setMostrarToken((visivel) => !visivel)}>
+                  <TokenFieldIcon name={mostrarToken ? "eyeOff" : "eye"} />
+                </button>
+                <button type="button" title="Copiar token" aria-label="Copiar token" onClick={() => void copiarTokenInstancia()}>
+                  <TokenFieldIcon name="copy" />
+                </button>
+              </div>
+            </div>
             <small className="field-help">
-              O token não é exibido após salvar e será usado apenas pelas funções seguras do servidor.
+              O token fica oculto por padrão e é usado apenas pelas funções seguras do servidor.
             </small>
           </label>
 
@@ -660,9 +705,22 @@ export function Configuracoes() {
                   </button>
                 </div>
               </div>
+              {dadosInstancia?.qrcode && !isInstanciaConectada(dadosInstancia) && (
+                <div className="btzap-qrcode-box btzap-qrcode-connection-card">
+                  <img src={dadosInstancia.qrcode} alt="QR Code WhatsApp" />
+                  <p>
+                    Abra o WhatsApp no celular, vá em Aparelhos conectados e escaneie o QR Code.
+                  </p>
+                </div>
+              )}
             </div>
+          </div>
 
             <div className="btzap-connection-right">
+              <div className="btzap-status-card-heading">
+                <h3>Status da Conexão</h3>
+                <p>Informações retornadas pela última consulta da instância WhatsApp.</p>
+              </div>
               {mensagemInstancia && (
                 <div className="feedback-box feedback-success">{mensagemInstancia}</div>
               )}
@@ -673,21 +731,22 @@ export function Configuracoes() {
 
               <div className="btzap-instance-status">
                 <div className="btzap-instance-details">
-                  {dadosInstancia?.profilePicUrl && (
-                    <img src={dadosInstancia.profilePicUrl} alt="Perfil WhatsApp" />
-                  )}
-
                   <dl>
-                    <div>
-                      <dt>Status</dt>
-                      <dd>{getStatusInstanciaLabel(dadosInstancia)}</dd>
+                    <div className="btzap-status-main-row">
+                      <div>
+                        <dt>Status</dt>
+                        <dd>{getStatusInstanciaLabel(dadosInstancia)}</dd>
+                      </div>
+                      {dadosInstancia?.profilePicUrl && isInstanciaConectada(dadosInstancia) && (
+                        <img src={dadosInstancia.profilePicUrl} alt="Perfil WhatsApp" />
+                      )}
                     </div>
 
                     {dadosInstancia ? (
                       <>
                         <div>
                           <dt>Status salvo</dt>
-                          <dd>{dadosInstancia.status || "-"}</dd>
+                          <dd>{formatarStatusSalvoWhatsapp(dadosInstancia.status)}</dd>
                         </div>
 
                         <div>
@@ -707,7 +766,7 @@ export function Configuracoes() {
 
                         <div>
                           <dt>Código de pareamento</dt>
-                          <dd>{dadosInstancia.paircode}</dd>
+                          <dd>{dadosInstancia.paircode || "-"}</dd>
                         </div>
                       </>
                     ) : (
@@ -719,17 +778,8 @@ export function Configuracoes() {
                   </dl>
                 </div>
 
-                {dadosInstancia?.qrcode && !isInstanciaConectada(dadosInstancia) && (
-                  <div className="btzap-qrcode-box">
-                    <img src={dadosInstancia.qrcode} alt="QR Code WhatsApp" />
-                    <p>
-                      Abra o WhatsApp no celular, vá em Aparelhos conectados e escaneie o QR Code.
-                    </p>
-                  </div>
-                )}
               </div>
             </div>
-          </div>
         </div>
       </section>
 

@@ -902,6 +902,9 @@ export function ContasAReceber() {
   const [vencimentoAte, setVencimentoAte] = useState(getUltimoDiaMesAtual);
   const [tipoConta, setTipoConta] = useState<TipoConta>("Todos");
   const [outroFiltro, setOutroFiltro] = useState<OutroFiltro>("Vencidas e vencendo hoje");
+  const [paginaAtual, setPaginaAtual] = useState(1);
+  const [totalRegistros, setTotalRegistros] = useState(0);
+  const [resumo, setResumo] = useState<ResumoContas>({ contasListadas: 0, valorTotal: 0, qtdVencidas: 0, valorVencido: 0, qtdAVencer: 0, valorAVencer: 0 });
   const [contaSelecionada, setContaSelecionada] = useState<ContaReceber | null>(null);
   const [contaProgramacao, setContaProgramacao] = useState<ContaReceber | null>(null);
   const [revisaoWhatsapp, setRevisaoWhatsapp] = useState<RevisaoWhatsapp | null>(null);
@@ -942,19 +945,28 @@ export function ContasAReceber() {
       return;
     }
 
-    const { data, error } = await supabase
-      .from("firebird_contas_receber")
-      .select("*")
-      .eq("id_empresa", usuario.id_empresa)
-      .order("dt_vencto", { ascending: false });
+    const { data, error } = await supabase.rpc("fn_contas_receber_consulta", {
+      p_id_empresa: usuario.id_empresa,
+      p_busca: busca.trim() || null,
+      p_vencimento_de: vencimentoDe || null,
+      p_vencimento_ate: vencimentoAte || null,
+      p_tipo_conta: tipoConta === "Todos" ? null : tipoConta,
+      p_status: outroFiltro,
+      p_pagina: paginaAtual,
+      p_tamanho_pagina: 50,
+    });
 
     if (error) {
       setContas([]);
       setAgendamentos({});
+      setTotalRegistros(0);
       setErro(error.message);
     } else {
-      const contasCarregadas = (data ?? []) as ContaReceber[];
+      const resposta = (data ?? {}) as { items?: ContaReceber[]; total?: number; resumo?: ResumoContas };
+      const contasCarregadas = resposta.items ?? [];
       setContas(contasCarregadas);
+      setTotalRegistros(Number(resposta.total ?? 0));
+      setResumo(resposta.resumo ?? { contasListadas: 0, valorTotal: 0, qtdVencidas: 0, valorVencido: 0, qtdAVencer: 0, valorAVencer: 0 });
       try {
         await carregarAgendamentos(contasCarregadas);
       } catch (errorAgendamento) {
@@ -964,48 +976,18 @@ export function ContasAReceber() {
     }
 
     setCarregando(false);
-  }, [carregarAgendamentos, usuario?.id_empresa]);
+  }, [busca, carregarAgendamentos, outroFiltro, paginaAtual, tipoConta, usuario?.id_empresa, vencimentoAte, vencimentoDe]);
 
   useEffect(() => {
     void carregarContas();
   }, [carregarContas]);
 
-  const filtrarContas = useCallback(() => {
-    const termo = normalizarBusca(busca);
+  useEffect(() => {
+    setPaginaAtual(1);
+  }, [busca, outroFiltro, tipoConta, vencimentoAte, vencimentoDe]);
 
-    return contas.filter((conta) => {
-      const atendeBusca =
-        !termo ||
-        [
-          conta.documento,
-          conta.historico,
-          conta.id_cliente,
-          conta.id_ctarec,
-          conta.cliente_nome,
-          conta.cliente_telefone,
-          conta.cliente_email,
-          conta.vendedor_nome,
-          conta.vendedor_apelido,
-          conta.vendedor_email,
-          conta.vendedor_telefone,
-          conta.id_vendedor,
-          conta.vendedor_codigo,
-          conta.nsu_cartao,
-          conta.txid_qrcode_pix,
-        ].some((valor) => normalizarBusca(valor).includes(termo));
-
-      const vencimento = normalizarData(conta.dt_vencto);
-      const atendeVencimentoDe = !vencimentoDe || (vencimento !== null && vencimento >= vencimentoDe);
-      const atendeVencimentoAte = !vencimentoAte || (vencimento !== null && vencimento <= vencimentoAte);
-      const atendeTipo = tipoConta === "Todos" || conta.tip_ctarec === tipoConta;
-      const atendeStatus = atendeOutroFiltro(conta, outroFiltro);
-
-      return atendeBusca && atendeVencimentoDe && atendeVencimentoAte && atendeTipo && atendeStatus;
-    });
-  }, [busca, contas, outroFiltro, tipoConta, vencimentoAte, vencimentoDe]);
-
-  const contasFiltradas = useMemo(() => filtrarContas(), [filtrarContas]);
-  const resumo = useMemo(() => calcularResumo(contasFiltradas), [contasFiltradas]);
+  const contasFiltradas = contas;
+  const totalPaginas = Math.max(1, Math.ceil(totalRegistros / 50));
 
   function abrirDetalhes(conta: ContaReceber) {
     setContaSelecionada(conta);
@@ -1254,7 +1236,7 @@ export function ContasAReceber() {
       <section className="results-section">
         <div className="section-title">
           <h2>Resultados</h2>
-          <span>{contasFiltradas.length} registro(s)</span>
+          <span>{totalRegistros} registro(s)</span>
         </div>
 
         {carregando && <div className="state-box">Carregando contas a receber...</div>}
@@ -1368,6 +1350,11 @@ export function ContasAReceber() {
               </article>
             ))}
           </div>
+          <nav className="receivables-pagination" aria-label="Paginação de contas a receber">
+            <button className="secondary-button" type="button" onClick={() => setPaginaAtual((pagina) => Math.max(1, pagina - 1))} disabled={paginaAtual <= 1 || carregando}>Anterior</button>
+            <span>Página <strong>{paginaAtual}</strong> de <strong>{totalPaginas}</strong></span>
+            <button className="secondary-button" type="button" onClick={() => setPaginaAtual((pagina) => Math.min(totalPaginas, pagina + 1))} disabled={paginaAtual >= totalPaginas || carregando}>Próxima</button>
+          </nav>
           </>
         )}
       </section>

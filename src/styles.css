@@ -4286,6 +4286,23 @@ dd {
   white-space: nowrap;
 }
 
+.receivables-pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 18px; padding: 14px; border-top: 1px solid #e5eaf0; color: #64748b; font-size: 0.82rem; }
+.receivables-pagination strong { color: #0f172a; }
+.receivables-pagination button { min-width: 100px; }
+
+@media (max-width: 560px) {
+  .receivables-pagination { align-items: stretch; flex-direction: column; text-align: center; }
+  .receivables-pagination button { width: 100%; }
+}
+
+.btzap-token-field { position: relative; }
+.btzap-token-field > input { width: 100%; padding-right: 86px; }
+.btzap-token-actions { position: absolute; top: 50%; right: 7px; display: flex; align-items: center; gap: 3px; transform: translateY(-50%); }
+.btzap-token-actions button { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 8px; padding: 0; color: #64748b; background: transparent; cursor: pointer; }
+.btzap-token-actions button:hover,
+.btzap-token-actions button:focus-visible { color: #2563eb; background: #eff6ff; }
+.btzap-token-actions svg { width: 18px; height: 18px; fill: none; stroke: currentcolor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
 .btzap-form label {
   display: grid;
   gap: 6px;
@@ -4337,7 +4354,9 @@ dd {
 
 .btzap-connection-panel {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+  align-items: start;
   margin-top: 22px;
   border-top: 1px solid #edf1f5;
   padding-top: 18px;
@@ -4345,9 +4364,16 @@ dd {
 
 .btzap-connection-layout {
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(420px, 0.95fr);
-  gap: 48px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
   align-items: flex-start;
+  min-width: 0;
+  border: 1px solid #dbe4ef;
+  border-radius: 16px;
+  padding: 20px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgb(15 23 42 / 6%);
+  order: 2;
 }
 
 .btzap-connection-left {
@@ -4362,7 +4388,20 @@ dd {
 
 .btzap-connection-right {
   min-width: 0;
+  margin-top: 0;
+  border: 1px solid #dbe4ef;
+  border-radius: 16px;
+  padding: 20px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgb(15 23 42 / 6%);
+  order: 1;
 }
+
+.btzap-qrcode-connection-card { margin-top: 16px; }
+
+.btzap-status-card-heading { margin-bottom: 16px; }
+.btzap-status-card-heading h3 { margin: 0; color: #0f172a; font-size: 1rem; }
+.btzap-status-card-heading p { margin: 5px 0 0; color: #64748b; font-size: 0.78rem; }
 
 .btzap-connection-right .feedback-box {
   margin-top: 0;
@@ -4433,6 +4472,20 @@ dd {
   display: grid;
   gap: 10px;
   margin: 0;
+}
+
+.btzap-connection-right .btzap-instance-details dl { grid-template-columns: minmax(0, 1fr); width: 100%; gap: 10px; }
+.btzap-connection-right .btzap-instance-details dl > div { min-width: 0; border: 1px solid #e5eaf1; border-radius: 11px; padding: 12px; background: #f8fafc; }
+.btzap-connection-right .btzap-instance-details dt { color: #64748b; font-size: 0.68rem; font-weight: 800; text-transform: uppercase; }
+.btzap-connection-right .btzap-instance-details dd { margin-top: 5px; overflow-wrap: anywhere; color: #0f172a; font-weight: 750; }
+.btzap-status-main-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.btzap-status-main-row > div { min-width: 0; }
+.btzap-status-main-row > img { width: 46px; height: 46px; flex: 0 0 auto; border: 1px solid #dbe4ef; border-radius: 50%; object-fit: cover; box-shadow: 0 4px 10px rgb(15 23 42 / 10%); }
+
+@media (max-width: 900px) {
+  .btzap-connection-panel { grid-template-columns: 1fr; }
+  .btzap-connection-right { padding: 15px; }
+  .btzap-connection-right .btzap-instance-details dl { grid-template-columns: 1fr; }
 }
 
 .btzap-instance-details dl > div {

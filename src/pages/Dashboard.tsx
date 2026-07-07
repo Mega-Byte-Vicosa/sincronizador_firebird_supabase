@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../auth/AuthContext";
 import type { ContaReceber } from "../types/contasReceber";
@@ -58,6 +58,26 @@ interface MonitoramentoWhatsapp {
   falhasHoje: number;
   ultimaAtualizacao: string;
 }
+
+interface DashboardContasServidor {
+  total: number;
+  vencidas: number;
+  vencendoHoje: number;
+  emCarencia: number;
+  aVencer: number;
+  recebidas: number;
+  valorVencendoHoje: number;
+  clientesEmAtrasoMes: number;
+  valorEmAtrasoMes: number;
+  quantidadeRecebidasMes: number;
+  valorRecebidasMes: number;
+}
+
+const dashboardContasInicial: DashboardContasServidor = {
+  total: 0, vencidas: 0, vencendoHoje: 0, emCarencia: 0, aVencer: 0, recebidas: 0,
+  valorVencendoHoje: 0, clientesEmAtrasoMes: 0, valorEmAtrasoMes: 0,
+  quantidadeRecebidasMes: 0, valorRecebidasMes: 0,
+};
 
 const monitoramentoInicial: MonitoramentoWhatsapp = {
   status: "Nao configurado",
@@ -165,6 +185,10 @@ function formatarMesAno(data: Date) {
     month: "long",
     year: "numeric",
   }).format(data);
+}
+
+function formatarMesConsulta(data: Date) {
+  return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
 function isRecebida(conta: ContaReceber) {
@@ -329,7 +353,7 @@ function calcularDashboard(contas: ContaReceber[]): DashboardResumo {
 
 export function Dashboard() {
   const { usuario } = useAuth();
-  const [contas, setContas] = useState<ContaReceber[]>([]);
+  const [dadosContas, setDadosContas] = useState<DashboardContasServidor>(dashboardContasInicial);
   const [mesSelecionado, setMesSelecionado] = useState(() => getInicioMes(new Date()));
   const [mesRecebidasSelecionado, setMesRecebidasSelecionado] = useState(() => getInicioMes(new Date()));
   const [monitoramentoWhatsapp, setMonitoramentoWhatsapp] = useState<MonitoramentoWhatsapp>(monitoramentoInicial);
@@ -415,44 +439,41 @@ export function Dashboard() {
     setErro(null);
 
     if (!usuario?.id_empresa) {
-      setContas([]);
+      setDadosContas(dashboardContasInicial);
       setMonitoramentoWhatsapp(monitoramentoInicial);
       setCarregando(false);
       return;
     }
 
     const [{ data, error }] = await Promise.all([
-      supabase.from("firebird_contas_receber").select("*").eq("id_empresa", usuario.id_empresa),
+      supabase.rpc("fn_dashboard_contas_resumo", {
+        p_id_empresa: usuario.id_empresa,
+        p_mes_atraso: formatarMesConsulta(mesSelecionado),
+        p_mes_recebidas: formatarMesConsulta(mesRecebidasSelecionado),
+      }),
       carregarMonitoramentoWhatsapp(),
     ]);
 
     if (error) {
-      setContas([]);
+      setDadosContas(dashboardContasInicial);
       setErro(error.message);
     } else {
-      setContas((data ?? []) as ContaReceber[]);
+      setDadosContas({ ...dashboardContasInicial, ...((data ?? {}) as DashboardContasServidor) });
     }
 
     setCarregando(false);
-  }, [carregarMonitoramentoWhatsapp, usuario?.id_empresa]);
+  }, [carregarMonitoramentoWhatsapp, mesRecebidasSelecionado, mesSelecionado, usuario?.id_empresa]);
 
   useEffect(() => {
     void carregarDashboard();
   }, [carregarDashboard]);
 
-  const resumo = useMemo(() => calcularDashboard(contas), [contas]);
-  const clientesEmAtrasoMes = useMemo(
-    () => calcularClientesEmAtraso(contas, mesSelecionado),
-    [contas, mesSelecionado],
-  );
-  const valorEmAtrasoMes = useMemo(() => calcularValorEmAtraso(contas, mesSelecionado), [contas, mesSelecionado]);
+  const resumo = dadosContas;
+  const clientesEmAtrasoMes = dadosContas.clientesEmAtrasoMes;
+  const valorEmAtrasoMes = dadosContas.valorEmAtrasoMes;
   const mesSelecionadoLabel = formatarMesAno(mesSelecionado);
-  const recebidasMes = useMemo(
-    () => calcularRecebidasNoMes(contas, mesRecebidasSelecionado),
-    [contas, mesRecebidasSelecionado],
-  );
-  const quantidadeRecebidasMes = recebidasMes.quantidade;
-  const valorRecebidasMes = recebidasMes.valorTotal;
+  const quantidadeRecebidasMes = dadosContas.quantidadeRecebidasMes;
+  const valorRecebidasMes = dadosContas.valorRecebidasMes;
   const mesRecebidasSelecionadoLabel = formatarMesAno(mesRecebidasSelecionado);
   const totalStatus = Math.max(1, resumo.vencidas + resumo.vencendoHoje + resumo.emCarencia + resumo.aVencer + resumo.recebidas);
 
@@ -561,7 +582,7 @@ export function Dashboard() {
         <article className="dashboard-panel">
           <div className="panel-title">
             <h2>Resumo de contas</h2>
-            <span>{contas.length} registro(s)</span>
+            <span>{dadosContas.total} registro(s)</span>
           </div>
           <div className="bar-list">
             {barras.map(([label, value, className]) => (
