@@ -544,6 +544,7 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
         supabase,
         empresaId: mensagem.id_empresa,
         tipoEnvio: categoriaEnvio,
+        clienteNome: mensagem.destinatario_nome,
         telefone,
         mensagem: conteudoParaEnvio,
         origem: mensagem.origem_modulo,

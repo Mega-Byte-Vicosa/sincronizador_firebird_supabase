@@ -474,6 +474,7 @@ export async function processarCampanhasAutomatizadas(
           try {
             const protegido = await processarEnvioWhatsApp({
               supabase, empresaId: campanha.id_empresa, tipoEnvio: "cobranca", clienteId: conta.id_cliente,
+              clienteNome: conta.cliente_nome, documento: conta.documento,
               telefone, mensagem, origem: "AUTOMACAO", referenciaId: campanha.id,
               enviarBtzap: async () => {
                 const result = await sendBtzapMessage(config, { phone: telefone, message: mensagem });
@@ -537,7 +538,7 @@ export async function processarCampanhasAutomatizadas(
         try {
           const tipoEnvio = campanha.tipo_automacao.startsWith("aniversariantes") ? "aniversario" : "campanha_promocao";
           const protegido = await processarEnvioWhatsApp({
-            supabase, empresaId: campanha.id_empresa, tipoEnvio, clienteId: cliente.id_cliente,
+            supabase, empresaId: campanha.id_empresa, tipoEnvio, clienteId: cliente.id_cliente, clienteNome: cliente.nome,
             telefone, mensagem, origem: "AUTOMACAO", referenciaId: campanha.id,
             enviarBtzap: async () => {
               const result = await sendBtzapMessage(config, { phone: telefone, message: mensagem });

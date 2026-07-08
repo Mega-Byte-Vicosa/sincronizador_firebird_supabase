@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../../auth/AuthContext";
 import { GlobalHeaderIcon } from "./GlobalPageHeader";
+import { supabase } from "../../lib/supabaseClient";
 
 interface TopbarProps {
   activePath: string;
@@ -30,6 +31,11 @@ export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
   const [alterandoSenha, setAlterandoSenha] = useState(false);
   const [feedbackSenha, setFeedbackSenha] = useState<{ tipo: "sucesso" | "erro"; mensagem: string } | null>(null);
   const [menuUsuarioAberto, setMenuUsuarioAberto] = useState(false);
+  const [modalResetAberto, setModalResetAberto] = useState(false);
+  const [senhaReset, setSenhaReset] = useState("");
+  const [confirmacaoReset, setConfirmacaoReset] = useState("");
+  const [resetando, setResetando] = useState(false);
+  const [feedbackReset, setFeedbackReset] = useState<{ tipo: "sucesso" | "erro"; mensagem: string } | null>(null);
   const nome = usuario?.nome || usuario?.usuario || "Usuário";
   const empresa = usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social || "Empresa";
   const iniciais = nome
@@ -92,6 +98,40 @@ export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
     }, 900);
   }
 
+  function fecharModalReset() {
+    if (resetando) return;
+    setModalResetAberto(false); setSenhaReset(""); setConfirmacaoReset(""); setFeedbackReset(null);
+  }
+
+  async function handleResetEmpresa(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!usuario?.id_empresa || !senhaReset || confirmacaoReset !== "LIMPAR") return;
+    const sessionToken = sessionStorage.getItem("consulta_clipp_pro_saas_session") ?? "";
+    setResetando(true); setFeedbackReset(null);
+    const { data, error } = await supabase.functions.invoke("reset-empresa", {
+      body: { empresa_id: usuario.id_empresa, session_token: sessionToken, senha: senhaReset, confirmacao: confirmacaoReset },
+    });
+    if (error || data?.success === false) {
+      setResetando(false);
+      let detalhe = data?.message || error?.message || "Não foi possível redefinir a empresa.";
+      const context = (error as { context?: unknown } | null)?.context;
+      if (context instanceof Response) {
+        try { const body = await context.clone().json(); detalhe = body?.message || body?.detail || detalhe; } catch { /* resposta sem JSON */ }
+      }
+      setFeedbackReset({ tipo: "erro", mensagem: detalhe }); return;
+    }
+    setSenhaReset(""); setConfirmacaoReset("");
+    setFeedbackReset({ tipo: "sucesso", mensagem: `Empresa redefinida com sucesso. Você será redirecionado para a tela de login. Total de registros removidos: ${Number(data?.total_registros_apagados ?? 0)}.` });
+    window.setTimeout(async () => {
+      try {
+        await supabase.auth.signOut();
+      } finally {
+        await sair();
+        window.location.replace("/login");
+      }
+    }, 1500);
+  }
+
   return (
     <>
       <header className="topbar page-global-header-top">
@@ -123,6 +163,7 @@ export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
             {menuUsuarioAberto && (
               <div className="page-global-user-dropdown">
                 <button type="button" onClick={() => { setMenuUsuarioAberto(false); setModalSenhaAberto(true); }}>Alterar senha</button>
+                <button className="user-menu-danger" type="button" onClick={() => { setMenuUsuarioAberto(false); setModalResetAberto(true); }}>Redefinir empresa</button>
                 <button type="button" onClick={() => void handleLogout()} disabled={saindo}>{saindo ? "Saindo..." : "Sair"}</button>
               </div>
             )}
@@ -197,6 +238,24 @@ export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
                   {alterandoSenha ? "Alterando..." : "Salvar senha"}
                 </button>
               </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {modalResetAberto && (
+        <div className="password-modal-backdrop" role="presentation" onClick={fecharModalReset}>
+          <section className="password-modal reset-company-modal" role="dialog" aria-modal="true" aria-labelledby="reset-company-title" onClick={(event) => event.stopPropagation()}>
+            <header className="password-modal-header reset-company-header">
+              <div><h2 id="reset-company-title">Redefinir empresa</h2><p>Essa ação irá apagar todos os dados operacionais da empresa logada. Essa ação não poderá ser desfeita.</p></div>
+              <button type="button" aria-label="Fechar redefinição" onClick={fecharModalReset} disabled={resetando}>&times;</button>
+            </header>
+            <form className="password-form" onSubmit={(event) => void handleResetEmpresa(event)}>
+              <div className="reset-company-warning"><strong>Ação irreversível</strong><p>Não serão apagados: usuários, empresa, login, parâmetros gerais de envio WhatsApp e modelos de campanhas/promoções.</p></div>
+              <label><span>Senha de confirmação</span><input type="password" value={senhaReset} onChange={(event) => setSenhaReset(event.target.value)} autoComplete="off" required /></label>
+              <label><span>Digite LIMPAR para confirmar</span><input type="text" value={confirmacaoReset} onChange={(event) => setConfirmacaoReset(event.target.value)} autoComplete="off" required /></label>
+              {feedbackReset && <div className={`password-feedback password-feedback-${feedbackReset.tipo}`} role="alert">{feedbackReset.mensagem}</div>}
+              <div className="password-modal-actions"><button className="secondary-button" type="button" onClick={fecharModalReset} disabled={resetando}>Cancelar</button><button className="danger-button" type="submit" disabled={resetando || !senhaReset || confirmacaoReset !== "LIMPAR"}>{resetando ? "Redefinindo empresa e encerrando sessão..." : "Redefinir empresa"}</button></div>
             </form>
           </section>
         </div>

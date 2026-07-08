@@ -15,6 +15,7 @@ function mensagemBloqueio(motivo: unknown) {
     bloqueado_fora_horario: "Envio bloqueado fora do horário permitido.",
     aguardando_horario_permitido: "Envio aguardando a próxima janela permitida.",
     bloqueado_limite_diario: "Envio bloqueado porque o limite diário foi atingido.",
+    bloqueado_limite_categoria_cliente_dia: "O cliente atingiu o limite diário de mensagens para esta categoria.",
     bloqueado_limite_minuto: "Envio aguardando o limite por minuto.",
     bloqueado_frequencia_cliente: "Envio bloqueado pela frequência mínima do cliente.",
     bloqueado_feriado: "Envio bloqueado em feriado.",
@@ -63,7 +64,8 @@ Deno.serve(async (req) => {
     if (!mensagem) return jsonResponse({ success: false, message: "Mensagem não pode estar vazia." }, 400);
 
     const resultado = await processarEnvioWhatsApp({
-      supabase, empresaId, tipoEnvio, clienteId, telefone, mensagem,
+      supabase, empresaId, tipoEnvio, clienteId, clienteNome: (conta?.cliente_nome ?? String(body.cliente_nome || "")) || null,
+      documento: (conta?.documento ?? String(body.documento || "")) || null, telefone, mensagem,
       origem: String(body.origem || (idCtarec ? "Contas a Receber" : "Envio manual")),
       referenciaId: body.referencia_id == null ? idCtarec : String(body.referencia_id), tentativaAtual,
       enviarBtzap: async () => {
@@ -77,7 +79,10 @@ Deno.serve(async (req) => {
       },
     });
 
-    if (!resultado.enviado) return jsonResponse({ success: false, bloqueado: true, motivo: resultado.motivo, proximaTentativaEm: resultado.proximaTentativaEm, proxima_tentativa_em: resultado.proximaTentativaEm, message: resultado.motivo === "erro_btzap" ? resultado.detalhe : mensagemBloqueio(resultado.motivo) });
+    if (!resultado.enviado) {
+      const mensagem = resultado.motivo === "erro_btzap" ? resultado.detalhe : mensagemBloqueio(resultado.motivo);
+      return jsonResponse({ success: false, bloqueado: true, motivo: resultado.motivo, mensagem, message: mensagem, proximaTentativaEm: resultado.proximaTentativaEm, proxima_tentativa_em: resultado.proximaTentativaEm });
+    }
     if (conta && idCtarec) {
       const agora = new Date().toISOString();
       const reenvio = operacaoEnvio === "reenvio";
