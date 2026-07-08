@@ -13,6 +13,7 @@ export interface ProcessarEnvioArgs {
   mensagem: string;
   origem?: string | null;
   referenciaId?: string | number | null;
+  modeloId?: string | null;
   tentativaAtual?: number;
   enviarBtzap: () => Promise<unknown>;
 }
@@ -22,6 +23,12 @@ const BLOQUEIOS_TEMPORARIOS = new Set([
   "aguardando_horario_permitido", "bloqueado_dia_nao_permitido", "bloqueado_feriado",
   "bloqueado_fora_horario", "bloqueado_limite_minuto", "bloqueado_limite_diario",
   "bloqueado_frequencia_cliente", "bloqueado_limite_categoria_cliente_dia", "aguardando_intervalo", "reenvio_agendado",
+]);
+const MOTIVOS_PENDENTES = new Set([
+  ...BLOQUEIOS_TEMPORARIOS,
+  "falha_sem_parametro_whats",
+  "aguardando_parametro",
+  "max_tentativas_reenvio",
 ]);
 
 export function normalizarTipoEnvio(valor?: string | null): TipoEnvioWhats {
@@ -37,6 +44,39 @@ export function sortearIntervaloSegundos(minimo: number, maximo: number) {
   const min = Math.max(0, Math.floor(Number(minimo) || 0));
   const max = Math.max(min, Math.floor(Number(maximo) || min));
   return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+export function motivoPendenteEnvio(motivo?: string | null) {
+  return MOTIVOS_PENDENTES.has(String(motivo ?? ""));
+}
+
+export function mensagemRetornoEnvio(motivo?: string | null, detalhe?: unknown) {
+  const detalheTexto = detalhe == null ? "" : String(detalhe).trim();
+  if (detalheTexto) return detalheTexto;
+  const mensagens: Record<string, string> = {
+    bloqueado_fora_horario: "Envio pendente: fora do horário permitido.",
+    aguardando_horario_permitido: "Envio pendente: aguardando próximo horário permitido.",
+    bloqueado_limite_minuto: "Envio pendente: limite de mensagens por minuto atingido.",
+    bloqueado_limite_diario: "Envio pendente: limite diário de mensagens atingido.",
+    bloqueado_limite_categoria_cliente_dia: "Envio pendente: cliente atingiu o limite diário desta categoria.",
+    bloqueado_dia_nao_permitido: "Envio pendente: dia da semana não permitido para envio.",
+    bloqueado_feriado: "Envio pendente: envio bloqueado em feriado.",
+    aguardando_intervalo: "Envio pendente: aguardando intervalo entre mensagens.",
+    reenvio_agendado: "Envio pendente: reenvio agendado.",
+    bloqueado_frequencia_cliente: "Envio pendente: frequência mínima do cliente ainda não foi atingida.",
+    falha_sem_parametro_whats: "Envio pendente: parâmetros de WhatsApp não configurados.",
+    aguardando_parametro: "Envio pendente: aguardando regra de envio permitida.",
+    max_tentativas_reenvio: "Envio pendente: limite máximo de tentativas de reenvio atingido.",
+    erro_btzap: "Erro técnico no BTZap.",
+    erro_whatsapp: "Erro técnico no WhatsApp.",
+    timeout: "Erro técnico: tempo limite excedido.",
+    erro_internet: "Erro técnico de internet ou conexão.",
+    falha_api: "Erro técnico na API de envio.",
+    erro_conexao: "Erro técnico de conexão.",
+    erro_tecnico: "Erro técnico no envio.",
+    erro_inesperado: "Erro inesperado no envio.",
+  };
+  return mensagens[String(motivo ?? "")] || "Envio pendente: aguardando regra de envio permitida.";
 }
 
 function partesAgora(timeZone: string) {
@@ -102,7 +142,16 @@ export async function validarParametrosEnvioWhats(args: Omit<ProcessarEnvioArgs,
   const tipo = normalizarTipoEnvio(args.tipoEnvio);
   const parametro = await buscarParametroWhats(supabase, empresaId, tipo);
   if (!parametro) return { podeEnviar: false, motivo: "falha_sem_parametro_whats", proximaTentativaEm: null };
-  if (tentativaAtual > Number(parametro.max_tentativas_reenvio ?? 0)) return { podeEnviar: false, motivo: "erro_btzap", parametro, parametroId: parametro.id, proximaTentativaEm: null };
+  if (tentativaAtual > Number(parametro.max_tentativas_reenvio ?? 0)) {
+    return {
+      podeEnviar: false,
+      motivo: "max_tentativas_reenvio",
+      detalhe: "Limite máximo de tentativas de reenvio atingido. A mensagem não será reenviada automaticamente.",
+      parametro,
+      parametroId: parametro.id,
+      proximaTentativaEm: null,
+    };
+  }
 
   const local = partesAgora(parametro.timezone || "America/Sao_Paulo");
   const dias: Record<string, string> = { mon: "permite_segunda", tue: "permite_terca", wed: "permite_quarta", thu: "permite_quinta", fri: "permite_sexta", sat: "permite_sabado", sun: "permite_domingo" };
@@ -157,23 +206,25 @@ export async function validarParametrosEnvioWhats(args: Omit<ProcessarEnvioArgs,
 }
 
 async function registrar(args: Omit<ProcessarEnvioArgs, "enviarBtzap">, validacao: any, status: string, erro?: string | null, retorno?: unknown) {
-  const statusHistorico = status === "enviado" ? "enviado" : status === "bloqueado_limite_categoria_cliente_dia" ? status : "erro";
+  const motivo = validacao.motivo ?? null;
+  const statusHistorico = status === "enviado" ? "enviado" : motivoPendenteEnvio(motivo) || status === "pendente" ? "pendente" : "erro";
+  const retornoErro = statusHistorico === "enviado" ? "OK" : erro ?? mensagemRetornoEnvio(motivo, validacao.detalhe);
   const payload = {
     id_empresa: args.empresaId, cliente_id: args.clienteId == null ? null : String(args.clienteId), cliente_nome: args.clienteNome ?? null,
     cliente_telefone: args.telefone, documento: args.documento ?? null,
     origem: args.origem || "WhatsApp", mensagem: args.mensagem, status: statusHistorico,
     tipo_envio: normalizarTipoEnvio(args.tipoEnvio), categoria_envio: normalizarTipoEnvio(args.tipoEnvio),
     operacao_envio: Number(args.tentativaAtual ?? 0) > 0 ? "reenvio" : "envio",
-    provider: "btzap", erro: erro ?? null, motivo_bloqueio: validacao.motivo ?? null, proxima_tentativa_em: validacao.proximaTentativaEm ?? null,
+    provider: "btzap", erro: retornoErro, motivo_bloqueio: motivo, proxima_tentativa_em: validacao.proximaTentativaEm ?? null,
     tentativas: args.tentativaAtual ?? 0, parametro_whats_id: validacao.parametroId ?? null, intervalo_sorteado_segundos: validacao.intervaloSorteadoSegundos ?? null,
     processado_em: status === "enviado" ? new Date().toISOString() : null, enviado_em: status === "enviado" ? new Date().toISOString() : null,
-    referencia_id: args.referenciaId == null ? null : String(args.referenciaId), response_payload: retorno ?? null,
+    referencia_id: args.referenciaId == null ? null : String(args.referenciaId), modelo_id: args.modeloId ?? null, response_payload: retorno ?? null,
   };
   const { data, error } = await args.supabase.from("tab_whatsapp_envios").insert(payload).select("id").single();
   if (error) throw error; return data?.id ?? null;
 }
 
-export async function registrarBloqueioEnvioWhats(args: Omit<ProcessarEnvioArgs, "enviarBtzap">, validacao: any) { return registrar(args, validacao, validacao.motivo || "aguardando_parametro"); }
+export async function registrarBloqueioEnvioWhats(args: Omit<ProcessarEnvioArgs, "enviarBtzap">, validacao: any) { return registrar(args, validacao, motivoPendenteEnvio(validacao.motivo) ? "pendente" : validacao.motivo || "aguardando_parametro", validacao.detalhe ?? null); }
 export async function registrarSucessoEnvioWhats(args: Omit<ProcessarEnvioArgs, "enviarBtzap">, validacao: any, retorno: unknown) { return registrar(args, validacao, "enviado", null, retorno); }
 export async function podeEnviarMensagemWhatsApp(args: Omit<ProcessarEnvioArgs, "enviarBtzap">) { return validarParametrosEnvioWhats(args); }
 

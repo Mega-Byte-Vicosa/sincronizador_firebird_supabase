@@ -38,7 +38,10 @@ export interface MensagemProgramada {
   enviado: boolean;
   data_hora_envio: string | null;
   erro_envio: string | null;
+  motivo_bloqueio?: string | null;
+  proxima_tentativa_em?: string | null;
   ativo: boolean;
+  modelo_id?: string | null;
   criado_em: string;
   atualizado_em: string;
 }

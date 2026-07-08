@@ -75,19 +75,118 @@ function resumirErro(valor: string | null | undefined) {
   return `${erro.slice(0, 70).trimEnd()}...`;
 }
 
-function getStatusClass(status: string | null) {
-  const statusNormalizado = String(status ?? "").trim().toLowerCase();
+function formatarMotivoBloqueio(motivo: string | null | undefined) {
+  const mensagens: Record<string, string> = {
+    bloqueado_fora_horario: "Envio pendente: fora do horário permitido.",
+    aguardando_horario_permitido: "Envio pendente: aguardando próximo horário permitido.",
+    bloqueado_limite_diario: "Envio pendente: limite diário atingido.",
+    bloqueado_limite_categoria_cliente_dia: "Envio pendente: cliente atingiu o limite diário desta categoria.",
+    bloqueado_limite_minuto: "Envio pendente: limite por minuto atingido.",
+    bloqueado_frequencia_cliente: "Envio pendente: frequência mínima do cliente ainda não foi atingida.",
+    bloqueado_feriado: "Envio pendente: envio bloqueado em feriado.",
+    bloqueado_dia_nao_permitido: "Envio pendente: dia da semana não permitido.",
+    aguardando_intervalo: "Envio pendente: aguardando intervalo entre mensagens.",
+    reenvio_agendado: "Envio pendente: reenvio agendado.",
+    aguardando_parametro: "Envio pendente: aguardando regra de envio permitida.",
+    falha_sem_parametro_whats: "Envio pendente: parâmetros de WhatsApp não configurados.",
+    max_tentativas_reenvio: "Envio pendente: limite máximo de tentativas de reenvio atingido.",
+    erro_btzap: "Erro no BTZap/WhatsApp sem detalhe técnico salvo. Verifique a configuração/conexão do WhatsApp ou os logs da Edge Function.",
+  };
+  return mensagens[String(motivo ?? "")] ?? motivo ?? null;
+}
+
+function normalizarStatusEnvio(envio: WhatsappEnvio): "pendente" | "enviado" | "erro" {
+  const status = normalizarTexto(envio.status);
+  const motivo = String(envio.motivo_bloqueio ?? "");
+  const motivosPendentes = new Set([
+    "bloqueado_fora_horario",
+    "aguardando_horario_permitido",
+    "bloqueado_limite_minuto",
+    "bloqueado_limite_diario",
+    "bloqueado_limite_categoria_cliente_dia",
+    "bloqueado_dia_nao_permitido",
+    "bloqueado_feriado",
+    "aguardando_intervalo",
+    "reenvio_agendado",
+    "aguardando_parametro",
+    "falha_sem_parametro_whats",
+    "bloqueado_frequencia_cliente",
+    "max_tentativas_reenvio",
+  ]);
+  const enviados = new Set(["enviado", "sent", "delivered", "read", "sucesso", "processado"]);
+  const erros = new Set(["erro", "erro_btzap", "erro_whatsapp", "erro_internet", "timeout", "falha_api", "erro_conexao", "erro_tecnico", "erro_inesperado", "falhou", "falha"]);
+
+  if (status === "pendente" || motivosPendentes.has(motivo)) return "pendente";
+  if (enviados.has(status)) return "enviado";
+  if (erros.has(status) || erros.has(motivo)) return "erro";
+  return "pendente";
+}
+
+function labelStatusEnvio(envio: WhatsappEnvio) {
+  const status = normalizarStatusEnvio(envio);
+  if (status === "enviado") return "Enviado";
+  if (status === "erro") return "Erro";
+  return "Pendente";
+}
+
+function textoPayload(valor: unknown): string | null {
+  if (valor === null || valor === undefined) return null;
+  if (typeof valor === "string") {
+    const texto = valor.trim();
+    if (!texto) return null;
+    try {
+      return textoPayload(JSON.parse(texto)) ?? texto;
+    } catch {
+      return texto;
+    }
+  }
+  if (typeof valor === "number" || typeof valor === "boolean") return String(valor);
+  if (Array.isArray(valor)) {
+    const itens = valor.map(textoPayload).filter(Boolean) as string[];
+    return itens.length ? [...new Set(itens)].join(" | ") : null;
+  }
+  if (typeof valor === "object") {
+    const payload = valor as Record<string, unknown>;
+    const campos = ["message", "mensagem", "error", "erro", "detail", "details", "description", "reason", "motivo"];
+    const detalhes = campos.map((campo) => textoPayload(payload[campo])).filter(Boolean) as string[];
+    if (detalhes.length) return [...new Set(detalhes)].join(" | ");
+    if ("retorno" in payload) return textoPayload(payload.retorno);
+    if ("response" in payload) return textoPayload(payload.response);
+    if ("data" in payload) return textoPayload(payload.data);
+    if ("result" in payload) return textoPayload(payload.result);
+  }
+  return null;
+}
+
+function getRetornoErroEnvio(envio: WhatsappEnvio) {
+  const statusNormalizado = normalizarStatusEnvio(envio);
+  if (statusNormalizado === "enviado" && (!envio.erro || String(envio.erro).trim() === "")) return "OK";
+  if (envio.erro && String(envio.erro).trim()) return envio.erro;
+
+  const detalhePayload = textoPayload(envio.response_payload);
+  if (detalhePayload) return detalhePayload;
+
+  if (envio.motivo_bloqueio && String(envio.motivo_bloqueio).trim()) return formatarMotivoBloqueio(envio.motivo_bloqueio);
+
+  return statusNormalizado === "enviado" ? "OK" : null;
+}
+
+function getStatusClass(envio: WhatsappEnvio) {
+  const statusNormalizado = normalizarStatusEnvio(envio);
 
   if (statusNormalizado === "enviado") return "history-status history-status-enviado";
-  if (["erro", "falhou", "falha"].includes(statusNormalizado)) return "history-status history-status-erro";
-  if (statusNormalizado === "enviando") return "history-status history-status-enviando";
-  if (statusNormalizado === "cancelado") return "history-status history-status-cancelado";
+  if (statusNormalizado === "erro") return "history-status history-status-erro";
   if (statusNormalizado === "pendente") return "history-status history-status-pendente";
 
   return "history-status history-status-pendente";
 }
 
 function renderConfirmacaoEntrega(envio: WhatsappEnvio) {
+  if (normalizarStatusEnvio(envio) === "pendente") {
+    return <div className="history-delivery-status">
+      <span className="delivery-status-badge delivery-status-unknown">Aguardando entrega</span>
+    </div>;
+  }
   const entregue = Boolean(envio.entregue_em || envio.lido_em || ["ENTREGUE", "LIDO"].includes(String(envio.status_entrega ?? "").toUpperCase()));
   const falhou = String(envio.status_entrega ?? "").toUpperCase() === "FALHOU";
   const label = entregue ? "Entrega confirmada" : falhou ? "Falhou" : "Aguardando entrega";
@@ -186,14 +285,7 @@ function filtrarEnvios(envios: WhatsappEnvio[], filtros: FiltrosHistorico) {
       return false;
     }
     if (filtros.tipoEnvio !== "todos" && normalizarTexto(envio.tipo_envio) !== filtros.tipoEnvio) return false;
-    const statusNormalizado = normalizarTexto(envio.status);
-    const statusFiltro =
-      filtros.status === "erro"
-        ? ["erro", "falhou", "falha"]
-        : filtros.status === "enviado"
-          ? ["enviado"]
-          : [filtros.status];
-    if (filtros.status !== "todos" && !statusFiltro.includes(statusNormalizado)) return false;
+    if (filtros.status !== "todos" && normalizarStatusEnvio(envio) !== filtros.status) return false;
 
     return true;
   });
@@ -256,9 +348,9 @@ export function HistoricoEnvios() {
 
   const resumo = useMemo(
     () => ({
-      enviadosHoje: enviosFiltrados.filter((envio) => normalizarTexto(envio.status) === "enviado").length,
-      erros: enviosFiltrados.filter((envio) => ["erro", "falhou", "falha"].includes(normalizarTexto(envio.status))).length,
-      pendentes: enviosFiltrados.filter((envio) => normalizarTexto(envio.status) === "pendente").length,
+      enviadosHoje: enviosFiltrados.filter((envio) => normalizarStatusEnvio(envio) === "enviado").length,
+      erros: enviosFiltrados.filter((envio) => normalizarStatusEnvio(envio) === "erro").length,
+      pendentes: enviosFiltrados.filter((envio) => normalizarStatusEnvio(envio) === "pendente").length,
       total: enviosFiltrados.length,
     }),
     [enviosFiltrados],
@@ -353,9 +445,7 @@ export function HistoricoEnvios() {
               <option value="todos">Todos</option>
               <option value="enviado">Enviado</option>
               <option value="erro">Erro</option>
-              <option value="enviando">Enviando</option>
               <option value="pendente">Pendente</option>
-              <option value="cancelado">Cancelado</option>
             </select>
           </label>
 
@@ -397,7 +487,7 @@ export function HistoricoEnvios() {
                 <th>Confirmação de entrega</th>
                 <th>Confirmação de visualização</th>
                 <th>Mensagem</th>
-                <th>Erro</th>
+                <th>Retorno / Erro</th>
               </tr>
             </thead>
             <tbody>
@@ -422,7 +512,7 @@ export function HistoricoEnvios() {
                   <td>{formatarOrigemHistorico(envio)}</td>
                   <td>{mostrarValor(envio.tipo_envio)}</td>
                   <td>
-                    <span className={getStatusClass(envio.status)}>{mostrarValor(envio.status)}</span>
+                    <span className={getStatusClass(envio)}>{labelStatusEnvio(envio)}</span>
                   </td>
                   <td>{renderConfirmacaoEntrega(envio)}</td>
                   <td>{renderConfirmacaoVisualizacao(envio)}</td>
@@ -432,8 +522,8 @@ export function HistoricoEnvios() {
                     </span>
                   </td>
                   <td>
-                    <span className="history-error-cell" title={mostrarValor(envio.erro)}>
-                      {resumirErro(envio.erro)}
+                    <span className="history-error-cell" title={mostrarValor(getRetornoErroEnvio(envio))}>
+                      {resumirErro(getRetornoErroEnvio(envio))}
                     </span>
                   </td>
                 </tr>

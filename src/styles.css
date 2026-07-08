@@ -3253,6 +3253,11 @@ td:nth-child(4) {
   color: #b91c1c;
 }
 
+.whatsapp-status-pendente {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
 .table-icon-button {
   display: inline-grid;
   place-items: center;
@@ -3646,6 +3651,53 @@ dd {
   padding: 11px;
   background: #ffffff;
   box-shadow: 0 5px 15px rgb(15 23 42 / 5%);
+}
+
+.whatsapp-review-model-title,
+.scheduled-model-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.whatsapp-review-model-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.whatsapp-review-model-warning {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.whatsapp-review-message-card select,
+.scheduled-program-modal .scheduled-full-field select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 0 34px 0 11px;
+  color: #0f172a;
+  background: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.whatsapp-review-message-card select:focus,
+.scheduled-program-modal .scheduled-full-field select:focus {
+  outline: 3px solid rgb(59 130 246 / 10%);
+  border-color: #3b82f6;
 }
 
 .whatsapp-review-message-card textarea {
@@ -4557,6 +4609,12 @@ dd {
   border: 1px solid #fecaca;
   background: #fef2f2;
   color: #991b1b;
+}
+
+.feedback-info {
+  border: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
 }
 
 .history-table {

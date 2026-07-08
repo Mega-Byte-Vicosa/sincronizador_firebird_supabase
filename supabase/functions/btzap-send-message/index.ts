@@ -1,7 +1,7 @@
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { sendBtzapMessage, validateBtzapConfig } from "../_shared/btzapClient.ts";
 import { createSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
-import { normalizarTipoEnvio, processarEnvioWhatsApp } from "../_shared/whatsappSendGuard.ts";
+import { mensagemRetornoEnvio, motivoPendenteEnvio, normalizarTipoEnvio, processarEnvioWhatsApp } from "../_shared/whatsappSendGuard.ts";
 
 function textoErro(valor: unknown) { return valor instanceof Error ? valor.message : typeof valor === "string" ? valor : JSON.stringify(valor); }
 function telefoneNormalizado(valor: unknown) {
@@ -44,6 +44,7 @@ Deno.serve(async (req) => {
     const tipoEnvio = normalizarTipoEnvio(String(body.categoria_envio || body.tipo_envio || (idCtarec ? "cobranca" : "geral")));
     const operacaoEnvio = String(body.operacao_envio || "envio");
     const tentativaAtual = Number(body.tentativa_atual ?? (operacaoEnvio === "reenvio" ? 1 : 0));
+    const modeloId = body.modelo_id == null || String(body.modelo_id).trim() === "" ? null : String(body.modelo_id).trim();
     let conta: Record<string, any> | null = null;
 
     if (!empresaId) return jsonResponse({ success: false, message: "Empresa da sessão não identificada." }, 400);
@@ -67,7 +68,7 @@ Deno.serve(async (req) => {
       supabase, empresaId, tipoEnvio, clienteId, clienteNome: (conta?.cliente_nome ?? String(body.cliente_nome || "")) || null,
       documento: (conta?.documento ?? String(body.documento || "")) || null, telefone, mensagem,
       origem: String(body.origem || (idCtarec ? "Contas a Receber" : "Envio manual")),
-      referenciaId: body.referencia_id == null ? idCtarec : String(body.referencia_id), tentativaAtual,
+      referenciaId: body.referencia_id == null ? idCtarec : String(body.referencia_id), modeloId, tentativaAtual,
       enviarBtzap: async () => {
         const configResult = await supabase.from("tab_btzap_config").select("*").eq("id_empresa", empresaId).eq("ativo", true).maybeSingle();
         if (configResult.error) throw configResult.error;
@@ -80,8 +81,28 @@ Deno.serve(async (req) => {
     });
 
     if (!resultado.enviado) {
-      const mensagem = resultado.motivo === "erro_btzap" ? resultado.detalhe : mensagemBloqueio(resultado.motivo);
-      return jsonResponse({ success: false, bloqueado: true, motivo: resultado.motivo, mensagem, message: mensagem, proximaTentativaEm: resultado.proximaTentativaEm, proxima_tentativa_em: resultado.proximaTentativaEm });
+      const pendente = motivoPendenteEnvio(resultado.motivo);
+      const mensagem = pendente ? mensagemRetornoEnvio(resultado.motivo, resultado.detalhe) : resultado.motivo === "erro_btzap" ? resultado.detalhe : mensagemBloqueio(resultado.motivo);
+      if (conta && idCtarec) {
+        await supabase.from("firebird_contas_receber").update({
+          whatsapp_status: pendente ? "pendente" : "erro",
+          whatsapp_ultimo_erro: mensagem,
+          whatsapp_ultimo_tipo: operacaoEnvio === "reenvio" ? "reenvio" : "envio",
+          whatsapp_ultimo_envio_id: resultado.historicoId,
+          whatsapp_status_exibicao: pendente ? String(resultado.motivo || "pendente") : "erro",
+        }).eq("id_empresa", empresaId).eq("id_ctarec", idCtarec);
+      }
+      return jsonResponse({
+        success: pendente,
+        enviado: false,
+        status: pendente ? "pendente" : "erro",
+        bloqueado: true,
+        motivo: resultado.motivo,
+        mensagem,
+        message: mensagem,
+        proximaTentativaEm: resultado.proximaTentativaEm,
+        proxima_tentativa_em: resultado.proximaTentativaEm,
+      });
     }
     if (conta && idCtarec) {
       const agora = new Date().toISOString();
@@ -95,7 +116,7 @@ Deno.serve(async (req) => {
         whatsapp_ultimo_envio_id: resultado.historicoId, whatsapp_status_exibicao: reenvio ? `Reenviado ${reenvios}` : "Enviado",
       }).eq("id_empresa", empresaId).eq("id_ctarec", idCtarec);
     }
-    return jsonResponse({ success: true, message: "Mensagem enviada com sucesso.", envio_id: resultado.historicoId });
+    return jsonResponse({ success: true, enviado: true, status: "enviado", message: "Mensagem enviada com sucesso.", mensagem: "Mensagem enviada com sucesso.", envio_id: resultado.historicoId });
   } catch (error) {
     const detail = textoErro(error);
     return jsonResponse({ success: false, message: "A Edge Function não conseguiu processar a solicitação.", error: detail, detail, details: detail }, 500);

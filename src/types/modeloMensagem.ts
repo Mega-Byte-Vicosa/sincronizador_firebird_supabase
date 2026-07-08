@@ -15,4 +15,7 @@ export interface ModeloMensagem {
   padrao: boolean;
   criado_em?: string;
   atualizado_em?: string;
+  origem_modelo?: "cobranca" | "geral";
+  chave?: string;
+  modelo_global?: boolean;
 }

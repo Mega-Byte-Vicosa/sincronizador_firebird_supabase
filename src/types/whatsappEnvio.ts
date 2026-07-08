@@ -11,6 +11,7 @@ export interface WhatsappEnvio {
   status: string | null;
   tipo_envio: string | null;
   erro: string | null;
+  motivo_bloqueio?: string | null;
   origem_envio: string | null;
   origem_modulo: string | null;
   id_msg_programada: string | null;

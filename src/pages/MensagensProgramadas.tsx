@@ -13,7 +13,12 @@ import { MetricCardIcon } from "../components/layout/MetricCardIcon";
 import { montarMensagemCobrancaWhatsapp } from "../utils/mensagemCobranca";
 import { useAuth } from "../auth/AuthContext";
 import type { ModeloMensagem } from "../types/modeloMensagem";
-import { aplicarVariaveisModelo, buscarModelosMensagem, getCategoriaModeloConta, montarVariaveisContaReceber, prepararCorpoModeloContaReceber } from "../utils/modelosMensagem";
+import {
+  buscarTodosModelosMensagemAtivos,
+  getChaveModeloMensagem,
+  montarMensagemModeloContaReceber,
+  selecionarModeloPadraoContaReceber,
+} from "../utils/modelosMensagem";
 
 interface FiltrosMensagensProgramadas {
   busca: string;
@@ -45,6 +50,7 @@ interface FormMensagemProgramada {
   meses_ano: number[];
   status: StatusMensagemProgramada;
   ativo: boolean;
+  modelo_id: string | null;
 }
 
 interface DataProgramada {
@@ -90,6 +96,7 @@ function intervaloMesAtual() {
   };
 }
 
+type StatusVisualMensagemProgramada = "agendada" | "pendente" | "enviada" | "erro";
 type FiltroCardMensagem = "padrao" | "todos" | "PENDENTE" | "AGENDADO" | "ENVIADO" | "ERRO";
 
 const mesAtual = intervaloMesAtual();
@@ -175,6 +182,7 @@ function formInicial(): FormMensagemProgramada {
     meses_ano: [],
     status: "AGENDADO",
     ativo: true,
+    modelo_id: null,
   };
 }
 
@@ -216,18 +224,120 @@ function formatarTipoAgendamento(tipo: string | null | undefined) {
   return mostrarValor(tipo);
 }
 
-function getStatusClass(status: string | null | undefined) {
-  const statusNormalizado = normalizarTexto(status);
+const motivosPendentesMensagemProgramada = new Set([
+  "bloqueado_fora_horario",
+  "aguardando_horario_permitido",
+  "bloqueado_limite_minuto",
+  "bloqueado_limite_diario",
+  "bloqueado_limite_categoria_cliente_dia",
+  "bloqueado_dia_nao_permitido",
+  "bloqueado_feriado",
+  "aguardando_intervalo",
+  "reenvio_agendado",
+  "aguardando_parametro",
+  "falha_sem_parametro_whats",
+  "bloqueado_frequencia_cliente",
+  "max_tentativas_reenvio",
+]);
 
-  if (statusNormalizado === "enviada") return "history-status history-status-enviado";
-  if (statusNormalizado === "enviado") return "history-status history-status-enviado";
-  if (statusNormalizado === "erro") return "history-status history-status-erro";
-  if (statusNormalizado === "agendada") return "history-status history-status-enviando";
-  if (statusNormalizado === "agendado") return "history-status history-status-enviando";
-  if (statusNormalizado === "processando") return "history-status history-status-enviando";
-  if (statusNormalizado === "cancelada") return "history-status history-status-cancelado";
-  if (statusNormalizado === "cancelado") return "history-status history-status-cancelado";
+const mensagensPendenciaProgramada: Record<string, string> = {
+  bloqueado_fora_horario: "Envio pendente: fora do horário permitido.",
+  aguardando_horario_permitido: "Envio pendente: aguardando próximo horário permitido.",
+  bloqueado_limite_minuto: "Envio pendente: limite por minuto atingido.",
+  bloqueado_limite_diario: "Envio pendente: limite diário atingido.",
+  bloqueado_limite_categoria_cliente_dia: "Envio pendente: cliente atingiu o limite diário desta categoria.",
+  bloqueado_dia_nao_permitido: "Envio pendente: dia da semana não permitido.",
+  bloqueado_feriado: "Envio pendente: envio bloqueado em feriado.",
+  aguardando_intervalo: "Envio pendente: aguardando intervalo entre mensagens.",
+  reenvio_agendado: "Envio pendente: reenvio agendado.",
+  aguardando_parametro: "Envio pendente: aguardando regra de envio permitida.",
+  falha_sem_parametro_whats: "Envio pendente: parâmetros de WhatsApp não configurados.",
+  bloqueado_frequencia_cliente: "Envio pendente: frequência mínima do cliente ainda não foi atingida.",
+  max_tentativas_reenvio: "Envio pendente: limite máximo de tentativas de reenvio atingido.",
+};
+
+const motivosErroMensagemProgramada = new Set([
+  "erro",
+  "erro_btzap",
+  "erro_whatsapp",
+  "erro_internet",
+  "timeout",
+  "falha_api",
+  "erro_conexao",
+  "erro_tecnico",
+  "erro_inesperado",
+  "falha",
+]);
+
+function getMotivoBloqueioMensagemProgramada(mensagem: MensagemProgramada) {
+  return String(mensagem.motivo_bloqueio ?? "").trim();
+}
+
+function dataExecucaoFutura(mensagem: MensagemProgramada) {
+  if (!mensagem.executar_em) return false;
+  const data = new Date(mensagem.executar_em);
+  return !Number.isNaN(data.getTime()) && data.getTime() > Date.now();
+}
+
+function normalizarStatusMensagemProgramada(mensagem: MensagemProgramada): StatusVisualMensagemProgramada {
+  const status = normalizarTexto(mensagem.status);
+  const motivo = getMotivoBloqueioMensagemProgramada(mensagem);
+
+  if (["enviado", "enviada", "sent", "delivered", "read", "sucesso", "processado"].includes(status)) return "enviada";
+  if (motivosErroMensagemProgramada.has(status) || motivosErroMensagemProgramada.has(motivo)) return "erro";
+  if (status === "pendente" || motivosPendentesMensagemProgramada.has(motivo)) return "pendente";
+  if (["agendado", "agendada", "processando"].includes(status) || dataExecucaoFutura(mensagem)) return "agendada";
+
+  return "pendente";
+}
+
+function labelStatusMensagemProgramada(mensagem: MensagemProgramada) {
+  const status = normalizarStatusMensagemProgramada(mensagem);
+  if (status === "agendada") return "Agendada";
+  if (status === "pendente") return "Pendente";
+  if (status === "enviada") return "Enviada";
+  return "Erro";
+}
+
+function getStatusClassProgramada(mensagem: MensagemProgramada) {
+  const status = normalizarStatusMensagemProgramada(mensagem);
+  if (status === "enviada") return "history-status history-status-enviado";
+  if (status === "erro") return "history-status history-status-erro";
+  if (status === "agendada") return "history-status history-status-enviando";
   return "history-status history-status-pendente";
+}
+
+function getStatusClassFormulario(status: string | null | undefined) {
+  const statusNormalizado = normalizarTexto(status);
+  if (["enviado", "enviada"].includes(statusNormalizado)) return "history-status history-status-enviado";
+  if (statusNormalizado === "erro") return "history-status history-status-erro";
+  if (["agendado", "agendada", "processando"].includes(statusNormalizado)) return "history-status history-status-enviando";
+  return "history-status history-status-pendente";
+}
+
+function obterMensagemRetornoProgramada(mensagem: MensagemProgramada) {
+  const status = normalizarStatusMensagemProgramada(mensagem);
+  const erroEnvio = String(mensagem.erro_envio ?? "").trim();
+  const motivo = getMotivoBloqueioMensagemProgramada(mensagem);
+
+  if (status === "agendada") return erroEnvio || "Aguardando horário programado.";
+  if (status === "enviada") return erroEnvio || "OK";
+  if (status === "pendente") return erroEnvio || mensagensPendenciaProgramada[motivo] || "Envio pendente: aguardando próxima tentativa permitida.";
+
+  if (erroEnvio) return erroEnvio;
+  if (motivo === "erro_btzap") return "Erro técnico no BTZap.";
+  if (motivo === "erro_whatsapp") return "Erro técnico no WhatsApp.";
+  if (motivo === "timeout") return "Erro técnico: tempo limite excedido.";
+  if (motivo === "erro_internet" || motivo === "erro_conexao") return "Erro de internet ou conexão.";
+  if (motivo === "falha_api") return "Erro técnico na API de envio.";
+  return "Erro técnico ao enviar mensagem.";
+}
+
+function statusVisualParaFiltro(status: StatusVisualMensagemProgramada) {
+  if (status === "agendada") return "AGENDADO";
+  if (status === "pendente") return "PENDENTE";
+  if (status === "enviada") return "ENVIADO";
+  return "ERRO";
 }
 
 function dataInicioDia(data: string) {
@@ -361,7 +471,7 @@ function filtrarMensagensProgramadas(
     }
     if (filtros.origemModulo !== "todos" && mensagem.origem_modulo !== filtros.origemModulo) return false;
     if (filtros.tipoAgendamento !== "todos" && mensagem.tipo_agendamento !== filtros.tipoAgendamento) return false;
-    if (filtros.status !== "todos" && mensagem.status !== filtros.status) return false;
+    if (filtros.status !== "todos" && statusVisualParaFiltro(normalizarStatusMensagemProgramada(mensagem)) !== filtros.status) return false;
 
     return true;
   });
@@ -369,9 +479,9 @@ function filtrarMensagensProgramadas(
 
 function mensagemAtendeFiltroCard(mensagem: MensagemProgramada, filtro: FiltroCardMensagem) {
   if (filtro === "todos") return true;
-  const status = normalizarTexto(mensagem.status);
-  if (filtro === "padrao") return ["pendente", "agendado", "enviado"].includes(status);
-  return status === normalizarTexto(filtro);
+  const status = normalizarStatusMensagemProgramada(mensagem);
+  if (filtro === "padrao") return ["pendente", "agendada", "enviada"].includes(status);
+  return statusVisualParaFiltro(status) === filtro;
 }
 
 function validarMensagemProgramada(form: FormMensagemProgramada) {
@@ -431,8 +541,9 @@ function montarPayloadMensagemProgramada(form: FormMensagemProgramada, dataEnvio
     status: form.status,
     enviado: form.status === "ENVIADO" || form.status === "ENVIADA",
     data_hora_envio: form.status === "ENVIADO" || form.status === "ENVIADA" ? new Date().toISOString() : null,
-    erro_envio: null,
+    erro_envio: form.status === "ENVIADO" || form.status === "ENVIADA" ? "OK" : null,
     ativo: form.ativo,
+    modelo_id: form.modelo_id,
   };
 }
 
@@ -497,10 +608,10 @@ export function MensagensProgramadas() {
 
   const resumo = useMemo(
     () => ({
-      pendentes: mensagens.filter((mensagem) => mensagem.status === "PENDENTE").length,
-      agendadas: mensagens.filter((mensagem) => normalizarTexto(mensagem.status) === "agendado").length,
-      enviadas: mensagens.filter((mensagem) => normalizarTexto(mensagem.status) === "enviado").length,
-      erros: mensagens.filter((mensagem) => normalizarTexto(mensagem.status) === "erro").length,
+      pendentes: mensagens.filter((mensagem) => normalizarStatusMensagemProgramada(mensagem) === "pendente").length,
+      agendadas: mensagens.filter((mensagem) => normalizarStatusMensagemProgramada(mensagem) === "agendada").length,
+      enviadas: mensagens.filter((mensagem) => normalizarStatusMensagemProgramada(mensagem) === "enviada").length,
+      erros: mensagens.filter((mensagem) => normalizarStatusMensagemProgramada(mensagem) === "erro").length,
       total: mensagens.length,
     }),
     [mensagens],
@@ -535,6 +646,7 @@ export function MensagensProgramadas() {
       meses_ano: [],
       status: mensagem.status,
       ativo: mensagem.ativo,
+      modelo_id: mensagem.modelo_id ?? null,
     });
     setFeedback(null);
     setErro(null);
@@ -653,7 +765,7 @@ export function MensagensProgramadas() {
   async function marcarMensagemComoEnviada(mensagem: MensagemProgramada) {
     const { error } = await supabase
       .from("tb_msg_programadas")
-      .update({ status: "ENVIADO", enviado: true, data_hora_envio: new Date().toISOString(), erro_envio: null })
+      .update({ status: "ENVIADO", enviado: true, data_hora_envio: new Date().toISOString(), erro_envio: "OK" })
       .eq("id_empresa", usuario?.id_empresa ?? "")
       .eq("id_msg_programada", mensagem.id_msg_programada);
 
@@ -757,16 +869,6 @@ export function MensagensProgramadas() {
     return mensagens.find((mensagem) => mensagem.id_msg_programada === id) ?? null;
   }
 
-  useEffect(() => {
-    void executarMensagensProgramadas(true);
-
-    const intervalId = window.setInterval(() => {
-      void executarMensagensProgramadas(true);
-    }, 60_000);
-
-    return () => window.clearInterval(intervalId);
-  }, [executarMensagensProgramadas]);
-
   const cards = [
     { label: "Pendentes", value: resumo.pendentes, icon: "pending", color: "laranja", help: "Aguardando processamento", filtro: "PENDENTE" as const },
     { label: "Agendadas", value: resumo.agendadas, icon: "calendar", color: "azul", help: "Programadas para envio", filtro: "AGENDADO" as const },
@@ -863,10 +965,9 @@ export function MensagensProgramadas() {
             }}
           >
             <option value="todos">Todos</option>
+            <option value="AGENDADO">Agendada</option>
             <option value="PENDENTE">Pendente</option>
-            <option value="AGENDADO">Agendado</option>
-            <option value="ENVIADO">Enviado</option>
-            <option value="CANCELADO">Cancelado</option>
+            <option value="ENVIADO">Enviada</option>
             <option value="ERRO">Erro</option>
           </select>
         </label>
@@ -925,18 +1026,21 @@ export function MensagensProgramadas() {
                   <th>Tipo</th>
                   <th>Repetição</th>
                   <th>Status</th>
+                  <th>Retorno / Erro</th>
                   <th>Enviado em</th>
                   <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
                 {mensagensFiltradas.map((mensagem) => {
-                  const podeEditar = mensagem.status === "PENDENTE" || mensagem.status === "AGENDADO" || mensagem.status === "AGENDADA";
+                  const statusVisual = normalizarStatusMensagemProgramada(mensagem);
+                  const retornoErro = obterMensagemRetornoProgramada(mensagem);
+                  const podeEditar = statusVisual === "pendente" || statusVisual === "agendada";
                   const mensagemAtual = buscarMensagemProgramadaPorId(mensagem.id_msg_programada) ?? mensagem;
 
                   return (
                     <tr
-                      className={`scheduled-message-row scheduled-message-row-${normalizarTexto(mensagem.status) || "pendente"}`}
+                      className={`scheduled-message-row scheduled-message-row-${statusVisual}`}
                       key={mensagem.id_msg_programada}
                       tabIndex={0}
                       onClick={() => setMensagemSelecionada(mensagemAtual)}
@@ -953,10 +1057,11 @@ export function MensagensProgramadas() {
                       <td>{formatarTipoAgendamento(mensagem.tipo_agendamento)}</td>
                       <td>{mensagem.repetir ? mostrarValor(mensagem.tipo_repeticao) : "Não"}</td>
                       <td>
-                        <span className={getStatusClass(mensagem.status)} title={mensagem.erro_envio ?? undefined}>
-                          {mensagem.status}
+                        <span className={getStatusClassProgramada(mensagem)} title={retornoErro}>
+                          {labelStatusMensagemProgramada(mensagem)}
                         </span>
                       </td>
+                      <td title={retornoErro}>{mostrarValor(retornoErro)}</td>
                       <td>{formatarDataHora(mensagem.data_hora_envio)}</td>
                       <td>
                         <div className="actions-cell scheduled-actions-cell" onClick={(event) => event.stopPropagation()}>
@@ -1308,7 +1413,11 @@ export function MensagensProgramadas() {
                 </div>
                 <div>
                   <dt>Status</dt>
-                  <dd>{mensagemSelecionada.status}</dd>
+                  <dd>
+                    <span className={getStatusClassProgramada(mensagemSelecionada)}>
+                      {labelStatusMensagemProgramada(mensagemSelecionada)}
+                    </span>
+                  </dd>
                 </div>
                 <div>
                   <dt>Ativo</dt>
@@ -1344,12 +1453,10 @@ export function MensagensProgramadas() {
               <p className="scheduled-detail-text">{mensagemSelecionada.mensagem}</p>
             </section>
 
-            {mensagemSelecionada.erro_envio && (
-              <section className="details-section">
-                <h3>Erro de envio</h3>
-                <p className="scheduled-detail-text">{mensagemSelecionada.erro_envio}</p>
-              </section>
-            )}
+            <section className="details-section">
+              <h3>Retorno / Erro</h3>
+              <p className="scheduled-detail-text">{obterMensagemRetornoProgramada(mensagemSelecionada)}</p>
+            </section>
           </aside>
         </div>
       )}
@@ -1549,17 +1656,35 @@ export function ProgramarMensagemContaReceberModal({
   const [exibirDatasProgramadas, setExibirDatasProgramadas] = useState(false);
   const [modelos, setModelos] = useState<ModeloMensagem[]>([]);
   const [modeloSelecionado, setModeloSelecionado] = useState("");
+  const [modeloSugerido, setModeloSugerido] = useState<string | null>(null);
+  const [avisoModelo, setAvisoModelo] = useState<string | null>(null);
   const [carregandoModelos, setCarregandoModelos] = useState(true);
 
   useEffect(() => {
     let ativo = true;
-    const categoria = getCategoriaModeloConta(conta);
-    if (!usuario?.id_empresa || !categoria) {
+    if (!usuario?.id_empresa) {
       setCarregandoModelos(false);
       return () => { ativo = false; };
     }
-    void buscarModelosMensagem(usuario.id_empresa, categoria)
-      .then((dados) => { if (ativo) setModelos(dados); })
+    void buscarTodosModelosMensagemAtivos(usuario.id_empresa)
+      .then((dados) => {
+        if (!ativo) return;
+        const sugestao = selecionarModeloPadraoContaReceber(conta, dados);
+        const chaveSugerida = sugestao ? getChaveModeloMensagem(sugestao) : "";
+        setModelos(dados);
+        setModeloSelecionado(chaveSugerida);
+        setModeloSugerido(chaveSugerida || null);
+        setAvisoModelo(dados.length > 0 && !sugestao ? "Nenhum modelo padrão encontrado para esta situação. Selecione um modelo manualmente." : null);
+        if (sugestao) {
+          setForm((atual) => ({
+            ...atual,
+            modelo_id: sugestao.id,
+            mensagem: montarMensagemModeloContaReceber(conta, sugestao, {
+              nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
+            }),
+          }));
+        }
+      })
       .catch((error) => { if (ativo) setErro(error instanceof Error ? error.message : "Não foi possível carregar os modelos."); })
       .finally(() => { if (ativo) setCarregandoModelos(false); });
     return () => { ativo = false; };
@@ -1567,12 +1692,16 @@ export function ProgramarMensagemContaReceberModal({
 
   function selecionarModelo(idModelo: string) {
     setModeloSelecionado(idModelo);
-    const modelo = modelos.find((item) => item.id === idModelo);
-    if (!modelo) return;
-    const mensagem = aplicarVariaveisModelo(prepararCorpoModeloContaReceber(conta, modelo.corpo), montarVariaveisContaReceber(conta, {
+    setAvisoModelo(null);
+    const modelo = modelos.find((item) => getChaveModeloMensagem(item) === idModelo);
+    if (!modelo) {
+      setForm({ ...form, modelo_id: null });
+      return;
+    }
+    const mensagem = montarMensagemModeloContaReceber(conta, modelo, {
       nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
-    }));
-    setForm({ ...form, mensagem });
+    });
+    setForm({ ...form, modelo_id: modelo.id, mensagem });
   }
 
   async function salvarMensagemProgramadaContaReceber() {
@@ -1778,12 +1907,22 @@ export function ProgramarMensagemContaReceberModal({
               </label>
 
               <label className="scheduled-full-field">
-                <span>Modelo de cobrança</span>
+                <span className="scheduled-model-title">
+                  Modelo de mensagem
+                  {modeloSugerido && modeloSelecionado === modeloSugerido && (
+                    <small className="whatsapp-review-model-badge">Modelo sugerido</small>
+                  )}
+                </span>
                 <select value={modeloSelecionado} onChange={(event) => selecionarModelo(event.target.value)} disabled={salvando || carregandoModelos}>
                   <option value="">{carregandoModelos ? "Carregando modelos..." : "Mensagem padrão atual"}</option>
-                  {modelos.map((modelo) => <option key={modelo.id} value={modelo.id}>{modelo.nome}</option>)}
+                  {modelos.map((modelo) => (
+                    <option key={getChaveModeloMensagem(modelo)} value={getChaveModeloMensagem(modelo)}>
+                      {modelo.origem_modelo === "cobranca" ? "[Cobrança]" : modelo.modelo_global ? "[Global]" : "[Empresa]"} {modelo.nome}
+                    </option>
+                  ))}
                 </select>
-                <small>Selecionar um modelo apenas preenche o texto; você ainda pode editá-lo antes de programar.</small>
+                <small>Modelo sugerido automaticamente conforme a situação da conta. Você pode alterar antes de enviar.</small>
+                {avisoModelo && <small className="whatsapp-review-model-warning">{avisoModelo}</small>}
               </label>
 
               <label className="scheduled-full-field">
@@ -1925,7 +2064,7 @@ export function ProgramarMensagemContaReceberModal({
                 </select>
               </label>
               <div className="scheduled-status-help">
-                <span className={getStatusClass(form.status)}>{form.status === "AGENDADO" ? "Agendado" : form.status}</span>
+                <span className={getStatusClassFormulario(form.status)}>{form.status === "AGENDADO" ? "Agendado" : form.status}</span>
                 <p>Somente programações com status Agendado serão enviadas automaticamente.</p>
               </div>
             </div>

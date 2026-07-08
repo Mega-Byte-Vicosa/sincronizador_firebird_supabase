@@ -3,6 +3,8 @@ import type { ContaReceber } from "../types/contasReceber";
 import type { CategoriaModeloMensagem, ModeloMensagem } from "../types/modeloMensagem";
 
 const moeda = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+const origemModeloCobranca = "cobranca";
+const origemModeloGeral = "geral";
 
 function dataISO(valor: string | null | undefined) {
   const match = String(valor ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -84,19 +86,81 @@ export function montarVariaveisContaReceber(
 ) {
   const vencimento = dataISO(conta.dt_vencto);
   const limite = fimCarencia(conta);
+  const valorAtual = calcularValorAtualContaReceber(conta);
+  const diasAtraso = vencimento
+    ? String(Math.max(0, Math.floor((dataLocal(hojeISO()).getTime() - dataLocal(vencimento).getTime()) / 86400000)))
+    : "0";
+  const cliente = conta.cliente_nome || "cliente";
+  const documento = conta.documento || String(conta.id_ctarec);
+  const dataVencimento = vencimento ? formatarData(dataLocal(vencimento)) : "";
+  const valorFormatado = moeda.format(valorAtual);
+  const empresaNome = empresa?.nome || "Nossa empresa";
+
   return {
-    cliente_nome: conta.cliente_nome || "cliente",
-    documento: conta.documento || String(conta.id_ctarec),
-    data_vencimento: vencimento ? formatarData(dataLocal(vencimento)) : "",
+    nome: cliente,
+    cliente,
+    cliente_nome: cliente,
+    empresa: empresaNome,
+    empresa_nome: empresaNome,
+    documento,
+    numero_documento: documento,
+    data_vencimento: dataVencimento,
+    vencimento: dataVencimento,
     data_final_carencia: limite ? formatarData(limite) : "",
     dias_carencia: String(diasCarencia(conta)),
+    dias_atraso: diasAtraso,
     valor_original: moeda.format(Number(conta.vlr_ctarec ?? 0)),
-    valor_atual: getCategoriaModeloConta(conta) === "contas_receber_vencida" ? moeda.format(calcularValorAtualContaReceber(conta)) : "",
+    valor: valorFormatado,
+    valor_atual: valorFormatado,
     data_envio: formatarData(new Date()),
-    empresa_nome: empresa?.nome || "Nossa empresa",
     link_pagamento: "",
     telefone_empresa: empresa?.telefone || "",
   };
+}
+
+function normalizarTituloModelo(valor: string) {
+  return valor
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR")
+    .trim();
+}
+
+export function getChaveModeloMensagem(modelo: ModeloMensagem) {
+  return modelo.chave || `${modelo.origem_modelo || origemModeloCobranca}:${modelo.id}`;
+}
+
+export function selecionarModeloPadraoContaReceber(conta: ContaReceber, modelos: ModeloMensagem[]) {
+  const categoria = getCategoriaModeloConta(conta);
+  const contem = (modelo: ModeloMensagem, termos: string[]) => {
+    const titulo = normalizarTituloModelo(modelo.nome);
+    return termos.some((termo) => titulo.includes(termo));
+  };
+
+  if (categoria === "contas_receber_carencia") {
+    return modelos.find((modelo) => contem(modelo, ["carencia"])) ?? null;
+  }
+
+  if (categoria === "contas_receber_a_vencer") {
+    return modelos.find((modelo) => contem(modelo, ["a vencer"])) ?? null;
+  }
+
+  if (categoria === "contas_receber_vencida") {
+    return modelos.find((modelo) => contem(modelo, ["vencida", "vencido"])) ?? null;
+  }
+
+  return null;
+}
+
+export function montarMensagemModeloContaReceber(
+  conta: ContaReceber,
+  modelo: ModeloMensagem,
+  empresa?: { nome?: string | null; telefone?: string | null },
+) {
+  return aplicarVariaveisModelo(
+    prepararCorpoModeloContaReceber(conta, modelo.corpo),
+    montarVariaveisContaReceber(conta, empresa),
+  );
 }
 
 export async function buscarModelosMensagem(idEmpresa: string, categoria?: CategoriaModeloMensagem) {
@@ -108,5 +172,43 @@ export async function buscarModelosMensagem(idEmpresa: string, categoria?: Categ
   if (categoria) consulta = consulta.eq("categoria", categoria);
   const { data, error } = await consulta.order("padrao", { ascending: false }).order("nome", { ascending: true });
   if (error) throw error;
-  return (data ?? []) as ModeloMensagem[];
+  return (data ?? []).map((modelo) => ({
+    ...modelo,
+    origem_modelo: origemModeloCobranca,
+    chave: `${origemModeloCobranca}:${modelo.id}`,
+  })) as ModeloMensagem[];
+}
+
+export async function buscarTodosModelosMensagemAtivos(idEmpresa: string) {
+  const [modelosGerais, modelosCobranca] = await Promise.all([
+    supabase
+      .from("tab_modelos_msg")
+      .select("id, id_empresa, modelo_msg_titulo, modelo_msg, ativo, modelo_global, criado_em, atualizado_em")
+      .eq("ativo", true)
+      .or(`modelo_global.eq.true,id_empresa.eq.${idEmpresa}`)
+      .order("modelo_global", { ascending: false })
+      .order("modelo_msg_titulo", { ascending: true }),
+    buscarModelosMensagem(idEmpresa),
+  ]);
+
+  if (modelosGerais.error) throw modelosGerais.error;
+
+  const gerais = (modelosGerais.data ?? []).map((modelo) => ({
+    id: modelo.id,
+    id_empresa: modelo.id_empresa,
+    nome: modelo.modelo_msg_titulo,
+    categoria: modelo.modelo_global ? "global" : "empresa",
+    canal: "whatsapp",
+    assunto: null,
+    corpo: modelo.modelo_msg,
+    ativo: modelo.ativo,
+    padrao: false,
+    criado_em: modelo.criado_em,
+    atualizado_em: modelo.atualizado_em,
+    origem_modelo: origemModeloGeral,
+    chave: `${origemModeloGeral}:${modelo.id}`,
+    modelo_global: modelo.modelo_global,
+  })) as ModeloMensagem[];
+
+  return [...modelosCobranca, ...gerais];
 }

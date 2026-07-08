@@ -5,7 +5,12 @@ import { ProgramarMensagemContaReceberModal } from "./MensagensProgramadas";
 import { montarMensagemCobrancaWhatsapp } from "../utils/mensagemCobranca";
 import { useAuth } from "../auth/AuthContext";
 import type { ModeloMensagem } from "../types/modeloMensagem";
-import { aplicarVariaveisModelo, buscarModelosMensagem, getCategoriaModeloConta, montarVariaveisContaReceber, prepararCorpoModeloContaReceber } from "../utils/modelosMensagem";
+import {
+  buscarTodosModelosMensagemAtivos,
+  getChaveModeloMensagem,
+  montarMensagemModeloContaReceber,
+  selecionarModeloPadraoContaReceber,
+} from "../utils/modelosMensagem";
 import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 
 type TipoConta = "Todos" | "N" | "C" | "D" | "E";
@@ -41,6 +46,8 @@ interface RevisaoWhatsapp {
   enviando: boolean;
   modelos: ModeloMensagem[];
   modeloSelecionado: string;
+  modeloSugerido: string | null;
+  avisoModelo: string | null;
   carregandoModelos: boolean;
 }
 
@@ -50,12 +57,15 @@ interface MensagemProgramadaConta {
   id_origem: string | null;
   status: string;
   executar_em: string | null;
+  motivo_bloqueio?: string | null;
+  erro_envio?: string | null;
 }
 
 interface AgendamentoConta {
   status: string;
   total: number;
   proximoEnvio: string | null;
+  retorno: string;
 }
 
 type AgendamentosPorConta = Record<string, AgendamentoConta>;
@@ -98,6 +108,7 @@ function montarMapaAgendamentos(mensagens: MensagemProgramadaConta[]) {
       status: ordenados[0].status,
       total: registros.length,
       proximoEnvio: proximos[0]?.executar_em ?? null,
+      retorno: obterMensagemStatusWhatsapp(ordenados[0].status, ordenados[0].motivo_bloqueio, ordenados[0].erro_envio),
     };
     return mapa;
   }, {});
@@ -114,7 +125,7 @@ function renderAgendamentoConta(agendamento: AgendamentoConta | undefined) {
     ENVIADO: ["Enviado", "schedule-sent"],
   }[agendamento.status] ?? [agendamento.status, "schedule-none"];
   const proximoEnvio = agendamento.proximoEnvio ? formatarDataHora(agendamento.proximoEnvio) : "-";
-  const tooltip = `Total de agendamentos: ${agendamento.total}\nPróximo envio: ${proximoEnvio}\nStatus: ${agendamento.status}`;
+  const tooltip = `Total de agendamentos: ${agendamento.total}\nPróximo envio: ${proximoEnvio}\nStatus: ${configuracao[0]}\nRetorno: ${agendamento.retorno}`;
 
   return (
     <span className={`receivable-schedule-badge ${configuracao[1]}`} title={tooltip}>
@@ -412,6 +423,71 @@ function montarMensagemErroWhatsapp(data: unknown) {
   }
 
   return texto || "Não foi possível enviar a mensagem WhatsApp.";
+}
+
+function envioWhatsappPendente(data: unknown) {
+  if (!data || typeof data !== "object") return false;
+  const retorno = data as Record<string, unknown>;
+  const status = String(retorno.status ?? "").toLowerCase();
+  const motivo = String(retorno.motivo ?? "");
+  const motivosPendentes = new Set([
+    "bloqueado_fora_horario",
+    "aguardando_horario_permitido",
+    "bloqueado_limite_minuto",
+    "bloqueado_limite_diario",
+    "bloqueado_limite_categoria_cliente_dia",
+    "bloqueado_dia_nao_permitido",
+    "bloqueado_feriado",
+    "aguardando_intervalo",
+    "reenvio_agendado",
+    "aguardando_parametro",
+    "falha_sem_parametro_whats",
+    "bloqueado_frequencia_cliente",
+    "max_tentativas_reenvio",
+  ]);
+  return status === "pendente" || motivosPendentes.has(motivo);
+}
+
+type StatusWhatsappNormalizado = "enviado" | "pendente" | "erro" | "nao_enviado";
+
+const motivosWhatsappPendentes = new Set([
+  "bloqueado_fora_horario", "aguardando_horario_permitido", "bloqueado_limite_minuto",
+  "bloqueado_limite_diario", "bloqueado_limite_categoria_cliente_dia", "bloqueado_dia_nao_permitido",
+  "bloqueado_feriado", "aguardando_intervalo", "reenvio_agendado", "aguardando_parametro",
+  "falha_sem_parametro_whats", "bloqueado_frequencia_cliente", "max_tentativas_reenvio",
+]);
+
+const mensagensWhatsappPendentes: Record<string, string> = {
+  bloqueado_fora_horario: "Pendente: fora do horário permitido.",
+  aguardando_horario_permitido: "Pendente: aguardando o próximo horário permitido.",
+  bloqueado_limite_minuto: "Pendente: limite por minuto atingido.",
+  bloqueado_limite_diario: "Pendente: limite diário de envios atingido.",
+  bloqueado_limite_categoria_cliente_dia: "Pendente: cliente atingiu o limite diário desta categoria.",
+  bloqueado_dia_nao_permitido: "Pendente: dia da semana não permitido.",
+  bloqueado_feriado: "Pendente: envio bloqueado em feriado.",
+  aguardando_intervalo: "Pendente: aguardando intervalo entre mensagens.",
+  reenvio_agendado: "Pendente: reenvio agendado.",
+  aguardando_parametro: "Pendente: aguardando regra de envio permitida.",
+  falha_sem_parametro_whats: "Pendente: parâmetros de WhatsApp não configurados.",
+  bloqueado_frequencia_cliente: "Pendente: frequência mínima do cliente ainda não atingida.",
+  max_tentativas_reenvio: "Pendente: limite de tentativas de reenvio atingido.",
+};
+
+function normalizarStatusContaReceberWhats(status?: string | null, motivo?: string | null): StatusWhatsappNormalizado {
+  const valor = String(status ?? "").trim().toLowerCase();
+  const motivoNormalizado = String(motivo ?? "").trim().toLowerCase();
+  if (["enviado", "enviada", "sent", "delivered", "read", "sucesso", "processado"].includes(valor)) return "enviado";
+  if (valor === "pendente" || motivosWhatsappPendentes.has(valor) || motivosWhatsappPendentes.has(motivoNormalizado)) return "pendente";
+  if (["erro", "erro_btzap", "erro_whatsapp", "erro_internet", "erro_conexao", "erro_tecnico", "erro_inesperado", "timeout", "falha_api", "falha_conexao", "falha"].includes(valor)) return "erro";
+  return "nao_enviado";
+}
+
+function obterMensagemStatusWhatsapp(status?: string | null, motivo?: string | null, retorno?: string | null) {
+  const normalizado = normalizarStatusContaReceberWhats(status, motivo);
+  if (normalizado === "enviado") return retorno?.trim() || "OK";
+  if (normalizado === "pendente") return mensagensWhatsappPendentes[String(motivo || status).toLowerCase()] || retorno?.trim() || "Pendente: aguardando processamento.";
+  if (normalizado === "erro") return retorno?.trim() || "Erro técnico ao tentar enviar mensagem.";
+  return retorno?.trim() || "Nenhum envio realizado.";
 }
 
 function hojeISO(): string {
@@ -742,7 +818,10 @@ function jaHouveEnvioWhatsapp(conta: ContaReceber) {
 }
 
 function getWhatsappStatusLabel(conta: ContaReceber) {
-  if (conta.whatsapp_status === "erro") return "Erro no envio";
+  const status = normalizarStatusContaReceberWhats(conta.whatsapp_status, conta.whatsapp_status_exibicao);
+  if (status === "erro") return "Erro de envio";
+  if (status === "pendente") return "Pendente";
+  if (status === "enviado") return "Enviado";
 
   const totalEnvios = Number(conta.whatsapp_total_envios ?? 0);
   const totalReenvios = Number(conta.whatsapp_total_reenvios ?? 0);
@@ -756,7 +835,9 @@ function getWhatsappStatusLabel(conta: ContaReceber) {
 }
 
 function getWhatsappStatusClass(conta: ContaReceber) {
-  if (conta.whatsapp_status === "erro") return "whatsapp-status whatsapp-status-erro";
+  const status = normalizarStatusContaReceberWhats(conta.whatsapp_status, conta.whatsapp_status_exibicao);
+  if (status === "erro") return "whatsapp-status whatsapp-status-erro";
+  if (status === "pendente") return "whatsapp-status whatsapp-status-pendente";
   if (
     Number(conta.whatsapp_total_reenvios ?? 0) > 0 ||
     String(conta.whatsapp_status_exibicao ?? "").toLowerCase().startsWith("reenviado")
@@ -832,7 +913,12 @@ function renderAcoesTabela(
           </svg>
         </button>
       </div>
-      <span className={getWhatsappStatusClass(conta)}>{getWhatsappStatusLabel(conta)}</span>
+      <span
+        className={getWhatsappStatusClass(conta)}
+        title={obterMensagemStatusWhatsapp(conta.whatsapp_status, conta.whatsapp_status_exibicao, conta.whatsapp_ultimo_erro)}
+      >
+        {getWhatsappStatusLabel(conta)}
+      </span>
     </div>
   );
 }
@@ -926,7 +1012,7 @@ export function ContasAReceber() {
   const [contaSelecionada, setContaSelecionada] = useState<ContaReceber | null>(null);
   const [contaProgramacao, setContaProgramacao] = useState<ContaReceber | null>(null);
   const [revisaoWhatsapp, setRevisaoWhatsapp] = useState<RevisaoWhatsapp | null>(null);
-  const [feedbackWhatsapp, setFeedbackWhatsapp] = useState<string | null>(null);
+  const [feedbackWhatsapp, setFeedbackWhatsapp] = useState<{ mensagem: string; tipo: "sucesso" | "informativo" } | null>(null);
 
   const carregarAgendamentos = useCallback(async (contasCarregadas: ContaReceber[]) => {
     if (!usuario?.id_empresa) {
@@ -942,7 +1028,7 @@ export function ContasAReceber() {
 
     const { data, error } = await supabase
       .from("tb_msg_programadas")
-      .select("id_origem, status, executar_em")
+      .select("id_origem, status, executar_em, motivo_bloqueio, erro_envio")
       .eq("id_empresa", usuario.id_empresa)
       .eq("origem_modulo", "CONTA_RECEBER")
       .eq("ativo", true)
@@ -1026,7 +1112,7 @@ export function ContasAReceber() {
 
   function salvarMensagemProgramadaContaReceber(mensagem: string) {
     setContaProgramacao(null);
-    setFeedbackWhatsapp(mensagem);
+    setFeedbackWhatsapp({ mensagem, tipo: "sucesso" });
     void carregarAgendamentos(contas).catch((error) => {
       setErro(error instanceof Error ? error.message : "Erro ao atualizar agendamentos.");
     });
@@ -1034,12 +1120,12 @@ export function ContasAReceber() {
 
   async function abrirRevisaoWhatsapp(conta: ContaReceber, tipoEnvio: "envio" | "reenvio") {
     if (tipoEnvio === "reenvio" && !jaHouveEnvioWhatsapp(conta)) {
-      setFeedbackWhatsapp("Essa conta ainda não teve o primeiro envio. Use Enviar WhatsApp.");
+      setFeedbackWhatsapp({ mensagem: "Essa conta ainda não teve o primeiro envio. Use Enviar WhatsApp.", tipo: "informativo" });
       return;
     }
 
     if (tipoEnvio === "envio" && jaHouveEnvioWhatsapp(conta)) {
-      setFeedbackWhatsapp("Mensagem já enviada. Use Reenviar.");
+      setFeedbackWhatsapp({ mensagem: "Mensagem já enviada. Use Reenviar.", tipo: "informativo" });
       return;
     }
 
@@ -1053,19 +1139,37 @@ export function ContasAReceber() {
       enviando: false,
       modelos: [],
       modeloSelecionado: "",
+      modeloSugerido: null,
+      avisoModelo: null,
       carregandoModelos: true,
     });
 
-    const categoria = getCategoriaModeloConta(conta);
-    if (!categoria || !usuario?.id_empresa) {
+    if (!usuario?.id_empresa) {
       setRevisaoWhatsapp((atual) => atual ? { ...atual, carregandoModelos: false } : atual);
       return;
     }
 
     try {
-      const modelos = await buscarModelosMensagem(usuario.id_empresa, categoria);
+      const modelos = await buscarTodosModelosMensagemAtivos(usuario.id_empresa);
+      const modeloSugerido = selecionarModeloPadraoContaReceber(conta, modelos);
+      const chaveSugerida = modeloSugerido ? getChaveModeloMensagem(modeloSugerido) : "";
+      const mensagemModelo = modeloSugerido
+        ? montarMensagemModeloContaReceber(conta, modeloSugerido, {
+            nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
+          })
+        : montarMensagemCobrancaWhatsapp(conta);
       setRevisaoWhatsapp((atual) => atual?.conta.id_ctarec === conta.id_ctarec
-        ? { ...atual, modelos, carregandoModelos: false }
+        ? {
+            ...atual,
+            modelos,
+            modeloSelecionado: chaveSugerida,
+            modeloSugerido: chaveSugerida || null,
+            avisoModelo: modelos.length > 0 && !modeloSugerido
+              ? "Nenhum modelo padrão encontrado para esta situação. Selecione um modelo manualmente."
+              : null,
+            mensagem: mensagemModelo,
+            carregandoModelos: false,
+          }
         : atual);
     } catch (error) {
       setRevisaoWhatsapp((atual) => atual?.conta.id_ctarec === conta.id_ctarec
@@ -1076,13 +1180,13 @@ export function ContasAReceber() {
 
   function selecionarModeloWhatsapp(idModelo: string) {
     if (!revisaoWhatsapp) return;
-    const modelo = revisaoWhatsapp.modelos.find((item) => item.id === idModelo);
+    const modelo = revisaoWhatsapp.modelos.find((item) => getChaveModeloMensagem(item) === idModelo);
     const mensagem = modelo
-      ? aplicarVariaveisModelo(prepararCorpoModeloContaReceber(revisaoWhatsapp.conta, modelo.corpo), montarVariaveisContaReceber(revisaoWhatsapp.conta, {
+      ? montarMensagemModeloContaReceber(revisaoWhatsapp.conta, modelo, {
           nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
-        }))
+        })
       : revisaoWhatsapp.mensagem;
-    setRevisaoWhatsapp({ ...revisaoWhatsapp, modeloSelecionado: idModelo, mensagem, erro: null });
+    setRevisaoWhatsapp({ ...revisaoWhatsapp, modeloSelecionado: idModelo, mensagem, erro: null, avisoModelo: null });
   }
 
   function fecharRevisaoWhatsapp() {
@@ -1117,6 +1221,7 @@ export function ContasAReceber() {
         mensagem: revisaoWhatsapp.mensagem,
         origem: "contas_a_receber",
         referencia_id: revisaoWhatsapp.conta.id_ctarec,
+        modelo_id: revisaoWhatsapp.modeloSelecionado ? revisaoWhatsapp.modeloSelecionado.split(":").pop() : null,
       },
     });
 
@@ -1131,6 +1236,13 @@ export function ContasAReceber() {
       return;
     }
 
+    if (envioWhatsappPendente(data)) {
+      setRevisaoWhatsapp(null);
+      setFeedbackWhatsapp({ mensagem: data?.message ?? data?.mensagem ?? "Mensagem registrada como pendente.", tipo: "informativo" });
+      await carregarContas();
+      return;
+    }
+
     if (data?.success === false) {
       setRevisaoWhatsapp({
         ...revisaoWhatsapp,
@@ -1141,7 +1253,7 @@ export function ContasAReceber() {
     }
 
     setRevisaoWhatsapp(null);
-    setFeedbackWhatsapp(data?.message ?? "Mensagem enviada com sucesso.");
+    setFeedbackWhatsapp({ mensagem: data?.message ?? "Mensagem enviada com sucesso.", tipo: "sucesso" });
     await carregarContas();
   }
 
@@ -1254,7 +1366,11 @@ export function ContasAReceber() {
         </label>
       </section>
 
-      {feedbackWhatsapp && <div className="feedback-box feedback-success">{feedbackWhatsapp}</div>}
+      {feedbackWhatsapp && (
+        <div className={`feedback-box ${feedbackWhatsapp.tipo === "sucesso" ? "feedback-success" : "feedback-info"}`}>
+          {feedbackWhatsapp.mensagem}
+        </div>
+      )}
 
       <section className="results-section">
         <div className="section-title">
@@ -1498,16 +1614,26 @@ export function ContasAReceber() {
 
               <div className="whatsapp-review-content">
                 <label className="whatsapp-review-message-card">
-                  <span>Modelo de cobrança</span>
+                  <span className="whatsapp-review-model-title">
+                    Modelo de mensagem
+                    {revisaoWhatsapp.modeloSugerido && revisaoWhatsapp.modeloSelecionado === revisaoWhatsapp.modeloSugerido && (
+                      <small className="whatsapp-review-model-badge">Modelo sugerido</small>
+                    )}
+                  </span>
                   <select
                     value={revisaoWhatsapp.modeloSelecionado}
                     onChange={(event) => selecionarModeloWhatsapp(event.target.value)}
                     disabled={revisaoWhatsapp.enviando || revisaoWhatsapp.carregandoModelos}
                   >
                     <option value="">{revisaoWhatsapp.carregandoModelos ? "Carregando modelos..." : "Mensagem padrão atual"}</option>
-                    {revisaoWhatsapp.modelos.map((modelo) => <option key={modelo.id} value={modelo.id}>{modelo.nome}</option>)}
+                    {revisaoWhatsapp.modelos.map((modelo) => (
+                      <option key={getChaveModeloMensagem(modelo)} value={getChaveModeloMensagem(modelo)}>
+                        {modelo.origem_modelo === "cobranca" ? "[Cobrança]" : modelo.modelo_global ? "[Global]" : "[Empresa]"} {modelo.nome}
+                      </option>
+                    ))}
                   </select>
-                  <small>A mensagem preenchida pelo modelo continua editável antes do envio.</small>
+                  <small>Modelo sugerido automaticamente conforme a situação da conta. Você pode alterar antes de enviar.</small>
+                  {revisaoWhatsapp.avisoModelo && <small className="whatsapp-review-model-warning">{revisaoWhatsapp.avisoModelo}</small>}
                 </label>
                 <div className="whatsapp-review-grid">
                   <WhatsappReviewInfoCard icon="user" label="Cliente" value={revisaoWhatsapp.conta.cliente_nome ?? "-"} />

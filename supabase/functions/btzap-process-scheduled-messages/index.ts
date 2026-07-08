@@ -5,7 +5,7 @@ import { extrairDadosInstancia, montarEndpoint } from "../_shared/btzapInstance.
 import { extrairMensagemIdExterno } from "../_shared/btzapMessageStatus.ts";
 import { createSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { processarCampanhasAutomatizadas } from "../_shared/campaignAutomations.ts";
-import { normalizarTipoEnvio, processarEnvioWhatsApp } from "../_shared/whatsappSendGuard.ts";
+import { mensagemRetornoEnvio, motivoPendenteEnvio, normalizarTipoEnvio, processarEnvioWhatsApp } from "../_shared/whatsappSendGuard.ts";
 
 const LIMITE_POR_EXECUCAO = 10;
 const INTERVALO_ENTRE_ENVIOS_MS = 5_000;
@@ -25,6 +25,13 @@ interface MensagemProgramada {
   ativo: boolean;
   tentativas_envio: number;
   tipo_envio?: string | null;
+  modelo_id?: string | null;
+}
+
+interface ContaReceberOrigem {
+  id_ctarec: number | null;
+  documento: string | null;
+  cliente_id: string | number | null;
 }
 
 function normalizarTextoErro(valor: unknown): string {
@@ -65,6 +72,89 @@ function aguardar(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function mensagemBloqueioEnvio(motivo: unknown, detalhe?: unknown) {
+  const detalheTexto = normalizarTextoErro(detalhe);
+  if (String(motivo) === "erro_btzap" && detalheTexto) return detalheTexto;
+  const retornoPadrao = mensagemRetornoEnvio(String(motivo ?? ""), detalheTexto);
+  if (retornoPadrao) return retornoPadrao;
+  const mensagens: Record<string, string> = {
+    bloqueado_fora_horario: "Envio bloqueado fora do horÃ¡rio permitido.",
+    aguardando_horario_permitido: "Envio aguardando a prÃ³xima janela permitida.",
+    bloqueado_limite_diario: "Envio bloqueado porque o limite diÃ¡rio foi atingido.",
+    bloqueado_limite_categoria_cliente_dia: "O cliente atingiu o limite diÃ¡rio de mensagens para esta categoria.",
+    bloqueado_limite_minuto: "Envio aguardando o limite por minuto.",
+    bloqueado_frequencia_cliente: "Envio bloqueado pela frequÃªncia mÃ­nima do cliente.",
+    bloqueado_feriado: "Envio bloqueado em feriado.",
+    bloqueado_dia_nao_permitido: "Envio bloqueado em dia nÃ£o permitido.",
+    aguardando_intervalo: "Envio aguardando o intervalo de seguranÃ§a entre mensagens.",
+    falha_sem_parametro_whats: "Nenhum parÃ¢metro WhatsApp ativo foi encontrado para esta empresa.",
+    erro_btzap: "Limite mÃ¡ximo de tentativas de reenvio atingido. A mensagem nÃ£o serÃ¡ reenviada automaticamente.",
+  };
+  return mensagens[String(motivo)] || detalheTexto || String(motivo || "Envio nÃ£o realizado.");
+}
+
+async function buscarContaReceberOrigem(
+  supabase: ReturnType<typeof createSupabaseAdmin>,
+  mensagem: MensagemProgramada,
+): Promise<ContaReceberOrigem> {
+  if (mensagem.origem_modulo !== "CONTA_RECEBER" || !mensagem.id_origem) {
+    return { id_ctarec: null, documento: null, cliente_id: null };
+  }
+
+  const idCtarec = Number(mensagem.id_origem);
+  if (!Number.isFinite(idCtarec)) return { id_ctarec: null, documento: null, cliente_id: null };
+
+  const { data, error } = await supabase
+    .from("firebird_contas_receber")
+    .select("id_ctarec, documento, id_cliente")
+    .eq("id_empresa", mensagem.id_empresa)
+    .eq("id_ctarec", idCtarec)
+    .maybeSingle();
+
+  if (error) throw new Error(`NÃ£o foi possÃ­vel localizar o documento da conta: ${error.message}`);
+
+  return {
+    id_ctarec: data?.id_ctarec ?? idCtarec,
+    documento: data?.documento ?? null,
+    cliente_id: data?.id_cliente ?? null,
+  };
+}
+
+async function atualizarStatusWhatsappContaReceber(
+  supabase: ReturnType<typeof createSupabaseAdmin>,
+  mensagem: MensagemProgramada,
+  status: "enviado" | "pendente" | "erro",
+  retorno: string,
+  historicoId?: string | number | null,
+) {
+  if (mensagem.origem_modulo !== "CONTA_RECEBER" || !mensagem.id_origem) return;
+  const idCtarec = Number(mensagem.id_origem);
+  if (!Number.isFinite(idCtarec)) return;
+
+  const payload: Record<string, unknown> = {
+    whatsapp_status: status,
+    whatsapp_ultimo_erro: status === "enviado" ? null : retorno,
+    whatsapp_ultimo_tipo: "agendamento",
+    whatsapp_status_exibicao: status === "enviado" ? "Enviado" : status === "erro" ? "erro" : retorno,
+  };
+  if (historicoId != null) payload.whatsapp_ultimo_envio_id = historicoId;
+
+  if (status === "enviado") {
+    const { data: conta, error: contaError } = await supabase.from("firebird_contas_receber")
+      .select("whatsapp_primeiro_envio_em, whatsapp_total_envios")
+      .eq("id_empresa", mensagem.id_empresa).eq("id_ctarec", idCtarec).maybeSingle();
+    if (contaError) throw contaError;
+    const agora = new Date().toISOString();
+    payload.whatsapp_primeiro_envio_em = conta?.whatsapp_primeiro_envio_em || agora;
+    payload.whatsapp_ultimo_envio_em = agora;
+    payload.whatsapp_total_envios = Number(conta?.whatsapp_total_envios ?? 0) + 1;
+  }
+
+  const { error } = await supabase.from("firebird_contas_receber").update(payload)
+    .eq("id_empresa", mensagem.id_empresa).eq("id_ctarec", idCtarec);
+  if (error) throw error;
+}
+
 function valorBooleano(valor: unknown) {
   if (typeof valor === "boolean") return valor;
   const texto = String(valor ?? "").trim().toLowerCase();
@@ -76,14 +166,18 @@ function valorBooleano(valor: unknown) {
 async function validarConsentimentoCliente(
   supabase: ReturnType<typeof createSupabaseAdmin>,
   mensagem: MensagemProgramada,
+  contaOrigem?: ContaReceberOrigem,
 ) {
   if (mensagem.origem_modulo !== "CONTA_RECEBER" || !mensagem.id_origem) return null;
+
+  const idCtarec = contaOrigem?.id_ctarec ?? Number(mensagem.id_origem);
+  if (!Number.isFinite(idCtarec)) return null;
 
   const { data, error } = await supabase
     .from("firebird_contas_receber")
     .select("*")
     .eq("id_empresa", mensagem.id_empresa)
-    .eq("id_ctarec", Number(mensagem.id_origem))
+    .eq("id_ctarec", idCtarec)
     .maybeSingle();
 
   if (error) throw new Error(`Não foi possível validar a autorização do cliente: ${error.message}`);
@@ -157,28 +251,17 @@ async function registrarHistoricoMensagemProgramada(
   requestPayload: unknown,
   responsePayload: unknown,
 ) {
-  let documento: string | null = null;
-
-  if (mensagem.origem_modulo === "CONTA_RECEBER" && mensagem.id_origem) {
-    const { data } = await supabase
-      .from("firebird_contas_receber")
-      .select("documento")
-      .eq("id_empresa", mensagem.id_empresa)
-      .eq("id_ctarec", Number(mensagem.id_origem))
-      .maybeSingle();
-
-    documento = data?.documento ?? null;
-  }
+  const contaOrigem = await buscarContaReceberOrigem(supabase, mensagem);
 
   const agora = new Date().toISOString();
   const sucesso = status === "enviado";
   const historicoPayload = {
     id_empresa: mensagem.id_empresa,
-    id_ctarec: mensagem.origem_modulo === "CONTA_RECEBER" && mensagem.id_origem ? Number(mensagem.id_origem) : null,
+    id_ctarec: contaOrigem.id_ctarec,
     cliente_nome: mensagem.destinatario_nome || null,
     cliente_telefone: mensagem.destinatario_telefone || null,
     origem: mensagem.origem_modulo === "CAMPANHA" ? "Campanha de Promocao" : "Mensagem Programada",
-    documento,
+    documento: contaOrigem.documento,
     mensagem: mensagem.mensagem || null,
     status,
     tipo_envio: "envio",
@@ -196,6 +279,7 @@ async function registrarHistoricoMensagemProgramada(
     origem_modulo: mensagem.origem_modulo,
     id_msg_programada: mensagem.id_msg_programada,
     id_origem: mensagem.id_origem ? String(mensagem.id_origem) : null,
+    modelo_id: mensagem.modelo_id ?? null,
   };
 
   const { data: historicoExistente, error: buscaError } = await supabase
@@ -225,7 +309,7 @@ async function atualizarMensagemComoEnviada(
       status: "ENVIADO",
       enviado: true,
       data_hora_envio: new Date().toISOString(),
-      erro_envio: null,
+      erro_envio: "OK",
       processando_em: null,
     })
     .eq("id_empresa", mensagem.id_empresa)
@@ -391,7 +475,7 @@ async function buscarMensagensAgendadasParaEnvio(supabase: ReturnType<typeof cre
   let query = supabase
     .from("tb_msg_programadas")
     .select("*")
-    .eq("status", "AGENDADO")
+    .in("status", ["AGENDADO", "PENDENTE"])
     .eq("ativo", true)
     .eq("enviado", false)
     .lte("executar_em", new Date().toISOString())
@@ -419,7 +503,7 @@ async function reservarMensagemParaProcessamento(
     })
     .eq("id_empresa", mensagem.id_empresa)
     .eq("id_msg_programada", mensagem.id_msg_programada)
-    .eq("status", "AGENDADO")
+    .in("status", ["AGENDADO", "PENDENTE"])
     .eq("enviado", false)
     .eq("ativo", true)
     .select("*")
@@ -511,11 +595,14 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
     const conteudoParaEnvio = formatarCobrancaProgramadaParaEnvio(mensagem);
     let requestPayload: { phone: string | null; message: string } | null = null;
     let responsePayload: unknown = null;
+    let contaOrigem: ContaReceberOrigem = { id_ctarec: null, documento: null, cliente_id: null };
 
     try {
       console.log(`[Mensagens Programadas] Processando ID: ${mensagem.id_msg_programada}.`);
       console.log(`[Mensagens Programadas] Executar em: ${mensagem.executar_em}.`);
       console.log("[Mensagens Programadas] Validando envio.");
+
+      contaOrigem = await buscarContaReceberOrigem(supabase, mensagem);
 
       const erroValidacao = validarMensagemParaEnvio(mensagem);
       if (erroValidacao) throw new Error(erroValidacao);
@@ -526,7 +613,7 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
       const erroInstancia = await validarInstanciaBtzap(config as BtzapConfig & { endpoint_status_instancia?: string | null });
       if (erroInstancia) throw new Error(erroInstancia);
 
-      const erroConsentimento = await validarConsentimentoCliente(supabase, mensagem);
+      const erroConsentimento = await validarConsentimentoCliente(supabase, mensagem, contaOrigem);
       if (erroConsentimento) throw new Error(erroConsentimento);
 
       const telefone = normalizarTelefoneBrasil(mensagem.destinatario_telefone);
@@ -544,11 +631,14 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
         supabase,
         empresaId: mensagem.id_empresa,
         tipoEnvio: categoriaEnvio,
+        clienteId: contaOrigem.cliente_id ?? null,
         clienteNome: mensagem.destinatario_nome,
+        documento: contaOrigem.documento,
         telefone,
         mensagem: conteudoParaEnvio,
         origem: mensagem.origem_modulo,
         referenciaId: mensagem.id_origem || mensagem.id_msg_programada,
+        modeloId: mensagem.modelo_id ?? null,
         tentativaAtual: Number(mensagem.tentativas_envio ?? 0),
         enviarBtzap: async () => {
           const result = await sendBtzapMessage(config, requestPayload!);
@@ -557,18 +647,43 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
         },
       });
       if (!envioProtegido.enviado) {
+        const pendentePorRegra = motivoPendenteEnvio(envioProtegido.motivo);
         const proxima = envioProtegido.proximaTentativaEm || new Date(Date.now() + 60_000).toISOString();
+        const erroEnvio = mensagemBloqueioEnvio(envioProtegido.motivo, envioProtegido.detalhe);
         const { error: reagendarError } = await supabase.from("tb_msg_programadas").update({
-          status: envioProtegido.temporario ? "AGENDADO" : "ERRO",
+          status: pendentePorRegra ? "PENDENTE" : "ERRO",
           enviado: false,
-          erro_envio: envioProtegido.motivo,
+          erro_envio: erroEnvio,
           motivo_bloqueio: envioProtegido.motivo,
           proxima_tentativa_em: proxima,
-          executar_em: envioProtegido.temporario ? proxima : mensagem.executar_em,
+          executar_em: pendentePorRegra ? proxima : mensagem.executar_em,
           processando_em: null,
         }).eq("id_empresa", mensagem.id_empresa).eq("id_msg_programada", mensagem.id_msg_programada);
         if (reagendarError) throw reagendarError;
-        resultados.push({ id_msg_programada: mensagem.id_msg_programada, success: false, bloqueado: true, motivo: envioProtegido.motivo, proxima_tentativa_em: proxima });
+        if (envioProtegido.historicoId) {
+          const { error: historicoBloqueioError } = await supabase.from("tab_whatsapp_envios").update({
+            documento: contaOrigem.documento,
+            id_ctarec: contaOrigem.id_ctarec,
+            erro: erroEnvio,
+            status: pendentePorRegra ? "pendente" : "erro",
+            status_entrega: pendentePorRegra ? null : "FALHOU",
+            falhou_em: pendentePorRegra ? null : new Date().toISOString(),
+            origem_envio: "MENSAGEM_PROGRAMADA",
+            origem_modulo: mensagem.origem_modulo,
+            id_msg_programada: mensagem.id_msg_programada,
+            id_origem: mensagem.id_origem ? String(mensagem.id_origem) : null,
+            modelo_id: mensagem.modelo_id ?? null,
+          }).eq("id", envioProtegido.historicoId);
+          if (historicoBloqueioError) throw historicoBloqueioError;
+        }
+        await atualizarStatusWhatsappContaReceber(
+          supabase,
+          mensagem,
+          pendentePorRegra ? "pendente" : "erro",
+          pendentePorRegra ? String(envioProtegido.motivo || erroEnvio) : erroEnvio,
+          envioProtegido.historicoId,
+        );
+        resultados.push({ id_msg_programada: mensagem.id_msg_programada, success: pendentePorRegra, status: pendentePorRegra ? "pendente" : "erro", bloqueado: true, motivo: envioProtegido.motivo, retorno: erroEnvio, proxima_tentativa_em: proxima });
         continue;
       }
       responsePayload = envioProtegido.retornoBtzap;
@@ -576,6 +691,7 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
       if (erroRetornoApi) throw new Error(erroRetornoApi);
 
       await atualizarMensagemComoEnviada(supabase, mensagem);
+      await atualizarStatusWhatsappContaReceber(supabase, mensagem, "enviado", "OK", envioProtegido.historicoId);
       await atualizarClienteCampanha(supabase, mensagem, "enviado", null);
       await recalcularCampanha(supabase, mensagem);
 
@@ -600,6 +716,7 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
 
       try {
         await atualizarMensagemComErro(supabase, mensagem, errorMessage);
+        await atualizarStatusWhatsappContaReceber(supabase, mensagem, "erro", errorMessage);
         console.log("[Mensagens Programadas] Status atualizado para ERRO.");
       } catch (updateError) {
         const detail = updateError instanceof Error ? updateError.message : String(updateError);

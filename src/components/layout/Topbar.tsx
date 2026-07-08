@@ -35,6 +35,7 @@ export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
   const [senhaReset, setSenhaReset] = useState("");
   const [confirmacaoReset, setConfirmacaoReset] = useState("");
   const [resetando, setResetando] = useState(false);
+  const [resetConcluido, setResetConcluido] = useState(false);
   const [feedbackReset, setFeedbackReset] = useState<{ tipo: "sucesso" | "erro"; mensagem: string } | null>(null);
   const nome = usuario?.nome || usuario?.usuario || "Usuário";
   const empresa = usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social || "Empresa";
@@ -99,8 +100,18 @@ export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
   }
 
   function fecharModalReset() {
-    if (resetando) return;
-    setModalResetAberto(false); setSenhaReset(""); setConfirmacaoReset(""); setFeedbackReset(null);
+    if (resetando || resetConcluido) return;
+    setModalResetAberto(false); setSenhaReset(""); setConfirmacaoReset(""); setFeedbackReset(null); setResetConcluido(false);
+  }
+
+  async function confirmarResetConcluido() {
+    if (!resetConcluido) return;
+    try {
+      await supabase.auth.signOut();
+    } finally {
+      await sair();
+      window.location.replace("/login");
+    }
   }
 
   async function handleResetEmpresa(event: FormEvent<HTMLFormElement>) {
@@ -121,15 +132,8 @@ export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
       setFeedbackReset({ tipo: "erro", mensagem: detalhe }); return;
     }
     setSenhaReset(""); setConfirmacaoReset("");
-    setFeedbackReset({ tipo: "sucesso", mensagem: `Empresa redefinida com sucesso. Você será redirecionado para a tela de login. Total de registros removidos: ${Number(data?.total_registros_apagados ?? 0)}.` });
-    window.setTimeout(async () => {
-      try {
-        await supabase.auth.signOut();
-      } finally {
-        await sair();
-        window.location.replace("/login");
-      }
-    }, 1500);
+    setFeedbackReset({ tipo: "sucesso", mensagem: `Empresa redefinida com sucesso. Total de registros removidos: ${Number(data?.total_registros_apagados ?? 0)}. Clique em OK para encerrar a sessão e ir para a tela de login.` });
+    setResetConcluido(true);
   }
 
   return (
@@ -250,13 +254,22 @@ export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
               <div><h2 id="reset-company-title">Redefinir empresa</h2><p>Essa ação irá apagar todos os dados operacionais da empresa logada. Essa ação não poderá ser desfeita.</p></div>
               <button type="button" aria-label="Fechar redefinição" onClick={fecharModalReset} disabled={resetando}>&times;</button>
             </header>
-            <form className="password-form" onSubmit={(event) => void handleResetEmpresa(event)}>
-              <div className="reset-company-warning"><strong>Ação irreversível</strong><p>Não serão apagados: usuários, empresa, login, parâmetros gerais de envio WhatsApp e modelos de campanhas/promoções.</p></div>
-              <label><span>Senha de confirmação</span><input type="password" value={senhaReset} onChange={(event) => setSenhaReset(event.target.value)} autoComplete="off" required /></label>
-              <label><span>Digite LIMPAR para confirmar</span><input type="text" value={confirmacaoReset} onChange={(event) => setConfirmacaoReset(event.target.value)} autoComplete="off" required /></label>
-              {feedbackReset && <div className={`password-feedback password-feedback-${feedbackReset.tipo}`} role="alert">{feedbackReset.mensagem}</div>}
-              <div className="password-modal-actions"><button className="secondary-button" type="button" onClick={fecharModalReset} disabled={resetando}>Cancelar</button><button className="danger-button" type="submit" disabled={resetando || !senhaReset || confirmacaoReset !== "LIMPAR"}>{resetando ? "Redefinindo empresa e encerrando sessão..." : "Redefinir empresa"}</button></div>
-            </form>
+            {resetConcluido ? (
+              <div className="password-form">
+                {feedbackReset && <div className="password-feedback password-feedback-sucesso" role="alert">{feedbackReset.mensagem}</div>}
+                <div className="password-modal-actions">
+                  <button className="primary-button" type="button" onClick={() => void confirmarResetConcluido()}>OK</button>
+                </div>
+              </div>
+            ) : (
+              <form className="password-form" onSubmit={(event) => void handleResetEmpresa(event)}>
+                <div className="reset-company-warning"><strong>Ação irreversível</strong><p>Não serão apagados: usuários, empresa, login, parâmetros gerais de envio WhatsApp e modelos de campanhas/promoções.</p></div>
+                <label><span>Senha de confirmação</span><input type="password" value={senhaReset} onChange={(event) => setSenhaReset(event.target.value)} autoComplete="off" required /></label>
+                <label><span>Digite LIMPAR para confirmar</span><input type="text" value={confirmacaoReset} onChange={(event) => setConfirmacaoReset(event.target.value)} autoComplete="off" required /></label>
+                {feedbackReset && <div className={`password-feedback password-feedback-${feedbackReset.tipo}`} role="alert">{feedbackReset.mensagem}</div>}
+                <div className="password-modal-actions"><button className="secondary-button" type="button" onClick={fecharModalReset} disabled={resetando}>Cancelar</button><button className="danger-button" type="submit" disabled={resetando || !senhaReset || confirmacaoReset !== "LIMPAR"}>{resetando ? "Redefinindo empresa..." : "Redefinir empresa"}</button></div>
+              </form>
+            )}
           </section>
         </div>
       )}
