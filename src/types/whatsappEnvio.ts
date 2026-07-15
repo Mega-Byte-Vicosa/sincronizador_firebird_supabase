@@ -12,6 +12,8 @@ export interface WhatsappEnvio {
   tipo_envio: string | null;
   erro: string | null;
   motivo_bloqueio?: string | null;
+  ultima_tentativa_em?: string | null;
+  proxima_tentativa_em?: string | null;
   origem_envio: string | null;
   origem_modulo: string | null;
   id_msg_programada: string | null;
@@ -21,7 +23,10 @@ export interface WhatsappEnvio {
   enviado_api_em?: string | null;
   entregue_em?: string | null;
   lido_em?: string | null;
+  visualizado_em?: string | null;
   falhou_em?: string | null;
+  webhook_payload?: unknown | null;
+  ultimo_webhook_em?: string | null;
   webhook_ultimo_evento?: unknown | null;
   response_payload?: unknown | null;
 }

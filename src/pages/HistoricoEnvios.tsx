@@ -39,8 +39,65 @@ const filtrosIniciais: FiltrosHistorico = {
   dataFinal: getUltimoDiaMesAtual(),
   origem: "todas",
   tipoEnvio: "todos",
+  status: "erro_pendente",
+};
+
+const filtrosHistoricoLimpos: FiltrosHistorico = {
+  busca: "",
+  dataInicial: "",
+  dataFinal: "",
+  origem: "todas",
+  tipoEnvio: "todos",
   status: "todos",
 };
+
+const ITENS_POR_PAGINA_HISTORICO = 100;
+
+const resumoHistoricoVazio = {
+  enviados: 0,
+  erros: 0,
+  pendentes: 0,
+  total: 0,
+};
+
+const HISTORICO_ENVIOS_SELECT = [
+  "id",
+  "id_empresa",
+  "criado_em",
+  "enviado_em",
+  "cliente_nome",
+  "cliente_telefone",
+  "origem",
+  "documento",
+  "mensagem",
+  "status",
+  "tipo_envio",
+  "erro",
+  "motivo_bloqueio",
+  "ultima_tentativa_em",
+  "proxima_tentativa_em",
+  "origem_envio",
+  "origem_modulo",
+  "id_msg_programada",
+  "id_origem",
+  "mensagem_id_externo",
+  "status_entrega",
+  "enviado_api_em",
+  "entregue_em",
+  "lido_em",
+  "visualizado_em",
+  "falhou_em",
+  "webhook_payload",
+  "ultimo_webhook_em",
+  "webhook_ultimo_evento",
+  "response_payload",
+].join(",");
+
+function formatarDataFiltro(valor: string) {
+  if (!valor) return "";
+  const [ano, mes, dia] = valor.split("-");
+  return ano && mes && dia ? `${dia}/${mes}/${ano}` : valor;
+}
 
 function mostrarValor(valor: string | number | null | undefined) {
   if (valor === null || valor === undefined || String(valor).trim() === "") return "-";
@@ -187,11 +244,11 @@ function renderConfirmacaoEntrega(envio: WhatsappEnvio) {
       <span className="delivery-status-badge delivery-status-unknown">Aguardando entrega</span>
     </div>;
   }
-  const entregue = Boolean(envio.entregue_em || envio.lido_em || ["ENTREGUE", "LIDO"].includes(String(envio.status_entrega ?? "").toUpperCase()));
+  const entregue = Boolean(envio.entregue_em || envio.lido_em || envio.visualizado_em || ["ENTREGUE", "LIDO"].includes(String(envio.status_entrega ?? "").toUpperCase()));
   const falhou = String(envio.status_entrega ?? "").toUpperCase() === "FALHOU";
-  const label = entregue ? "Entrega confirmada" : falhou ? "Falhou" : "Aguardando entrega";
+  const label = entregue ? "Entregue" : falhou ? "Erro na entrega" : "Aguardando entrega";
   const className = entregue ? "delivery-status-delivered" : falhou ? "delivery-status-failed" : "delivery-status-unknown";
-  const data = envio.entregue_em || envio.lido_em || envio.falhou_em;
+  const data = envio.entregue_em || envio.lido_em || envio.visualizado_em || envio.falhou_em;
 
   return <div className="history-delivery-status">
     <span className={`delivery-status-badge ${className}`}>{label}</span>
@@ -200,14 +257,24 @@ function renderConfirmacaoEntrega(envio: WhatsappEnvio) {
 }
 
 function renderConfirmacaoVisualizacao(envio: WhatsappEnvio) {
-  const visualizada = Boolean(envio.lido_em || String(envio.status_entrega ?? "").toUpperCase() === "LIDO");
+  const dataVisualizacao = envio.lido_em || envio.visualizado_em || null;
+  const visualizada = Boolean(dataVisualizacao || String(envio.status_entrega ?? "").toUpperCase() === "LIDO");
 
   return <div className="history-delivery-status">
     <span className={`delivery-status-badge ${visualizada ? "delivery-status-read" : "delivery-status-unknown"}`}>
       {visualizada ? "Visualizada" : "Não confirmada"}
     </span>
-    {envio.lido_em && <small>{formatarDataHora(envio.lido_em)}</small>}
+    {dataVisualizacao && <small>{formatarDataHora(dataVisualizacao)}</small>}
   </div>;
+}
+
+function renderTentativasHistorico(envio: WhatsappEnvio) {
+  return (
+    <div className="history-attempts-info">
+      <small>Última Tentativa: {envio.ultima_tentativa_em ? formatarDataHora(envio.ultima_tentativa_em) : "-"}</small>
+      <small>Próxima Tentativa: {envio.proxima_tentativa_em ? formatarDataHora(envio.proxima_tentativa_em) : "-"}</small>
+    </div>
+  );
 }
 
 function dataInicioDia(data: string) {
@@ -285,21 +352,35 @@ function filtrarEnvios(envios: WhatsappEnvio[], filtros: FiltrosHistorico) {
       return false;
     }
     if (filtros.tipoEnvio !== "todos" && normalizarTexto(envio.tipo_envio) !== filtros.tipoEnvio) return false;
-    if (filtros.status !== "todos" && normalizarStatusEnvio(envio) !== filtros.status) return false;
+    const statusEnvio = normalizarStatusEnvio(envio);
+    if (filtros.status === "erro_pendente" && statusEnvio !== "erro" && statusEnvio !== "pendente") return false;
+    if (filtros.status !== "todos" && filtros.status !== "erro_pendente" && statusEnvio !== filtros.status) return false;
 
     return true;
   });
 }
 
 function formatarOrigemHistorico(envio: WhatsappEnvio) {
-  if (envio.origem_modulo === "AUTOMACAO" || envio.origem_envio === "CAMPANHA_AUTOMATIZADA") return "Automação";
-  if (envio.origem_envio === "MENSAGEM_PROGRAMADA") {
-    if (envio.origem_modulo === "CAMPANHA") return "Campanha";
-    const modulo = envio.origem_modulo === "CONTA_RECEBER" ? "Conta a Receber" : mostrarValor(envio.origem_modulo);
-    return `Mensagem Programada / ${modulo}`;
+  const origem = normalizarOpcao(envio.origem);
+  const origemModulo = normalizarOpcao(envio.origem_modulo);
+  const origemEnvio = normalizarOpcao(envio.origem_envio);
+  const mensagem = normalizarTexto(envio.mensagem);
+  const contaReceber = ["contareceber", "contasareceber", "contasreceber"].includes(origemModulo)
+    || ["contareceber", "contasareceber", "contasreceber"].includes(origem);
+  const mensagemProgramada = origemEnvio === "mensagemprogramada"
+    || Boolean(envio.id_msg_programada)
+    || mensagem.replace(/^[^a-z0-9]+/, "").startsWith("mensagem programada");
+
+  if (origemModulo === "automacao" || origemEnvio === "campanhaautomatizada") return "Automação";
+  if (mensagemProgramada) {
+    if (contaReceber) return "Contas a Receber > Mensagens Programadas";
+    if (origemModulo === "campanha") return "Campanha";
+    return `Mensagens Programadas > ${mostrarValor(envio.origem_modulo)}`;
   }
 
-  if (envio.origem_modulo === "CAMPANHA" || normalizarOpcao(envio.origem) === "campanha") {
+  if (contaReceber) return "Contas a Receber";
+
+  if (origemModulo === "campanha" || origem === "campanha") {
     return "Campanha";
   }
 
@@ -310,12 +391,55 @@ export function HistoricoEnvios() {
   const { usuario } = useAuth();
   const [envios, setEnvios] = useState<WhatsappEnvio[]>([]);
   const [filtros, setFiltros] = useState<FiltrosHistorico>(filtrosIniciais);
+  const [paginaAtual, setPaginaAtual] = useState(1);
+  const [totalRegistros, setTotalRegistros] = useState(0);
+  const [resumo, setResumo] = useState(resumoHistoricoVazio);
   const [carregando, setCarregando] = useState(true);
+  const [carregandoResumo, setCarregandoResumo] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+
+  const carregarResumo = useCallback(async () => {
+    if (!usuario?.id_empresa) {
+      setResumo(resumoHistoricoVazio);
+      setCarregandoResumo(false);
+      return;
+    }
+
+    setCarregandoResumo(true);
+
+    try {
+      const consultaBase = () => supabase
+        .from("tab_whatsapp_envios")
+        .select("id", { count: "exact", head: true })
+        .eq("id_empresa", usuario.id_empresa);
+
+      const [enviados, erros, pendentes, total] = await Promise.all([
+        consultaBase().eq("status", "enviado"),
+        consultaBase().eq("status", "erro"),
+        consultaBase().eq("status", "pendente"),
+        consultaBase(),
+      ]);
+
+      const erroResumo = enviados.error ?? erros.error ?? pendentes.error ?? total.error;
+      if (erroResumo) throw erroResumo;
+
+      setResumo({
+        enviados: enviados.count ?? 0,
+        erros: erros.count ?? 0,
+        pendentes: pendentes.count ?? 0,
+        total: total.count ?? 0,
+      });
+    } catch {
+      setResumo(resumoHistoricoVazio);
+    } finally {
+      setCarregandoResumo(false);
+    }
+  }, [usuario?.id_empresa]);
 
   const carregarEnvios = useCallback(async () => {
     if (!usuario?.id_empresa) {
       setEnvios([]);
+      setTotalRegistros(0);
       setCarregando(false);
       return;
     }
@@ -323,63 +447,150 @@ export function HistoricoEnvios() {
     setCarregando(true);
     setErro(null);
 
-    const { data, error } = await supabase
-      .from("tab_whatsapp_envios")
-      .select("*")
-      .eq("id_empresa", usuario.id_empresa)
-      .order("criado_em", { ascending: false });
+    try {
+      const inicioPagina = (paginaAtual - 1) * ITENS_POR_PAGINA_HISTORICO;
+      const fimPagina = inicioPagina + ITENS_POR_PAGINA_HISTORICO - 1;
+      const busca = filtros.busca.trim();
+      const buscaTelefone = normalizarTelefone(busca);
+      let consulta = supabase
+        .from("tab_whatsapp_envios")
+        .select(HISTORICO_ENVIOS_SELECT, { count: "exact" })
+        .eq("id_empresa", usuario.id_empresa);
 
-    if (error) {
+      if (filtros.dataInicial) consulta = consulta.gte("criado_em", dataInicioDia(filtros.dataInicial).toISOString());
+      if (filtros.dataFinal) consulta = consulta.lt("criado_em", dataDiaSeguinte(filtros.dataFinal).toISOString());
+
+      if (filtros.status === "erro_pendente") {
+        consulta = consulta.in("status", ["erro", "pendente"]);
+      } else if (filtros.status !== "todos") {
+        consulta = consulta.eq("status", filtros.status);
+      }
+
+      if (filtros.tipoEnvio !== "todos") consulta = consulta.eq("tipo_envio", filtros.tipoEnvio);
+      if (filtros.origem === "mensagem_programada") consulta = consulta.eq("origem_envio", "MENSAGEM_PROGRAMADA");
+      if (filtros.origem === "campanhas_promocao") consulta = consulta.eq("origem_modulo", "CAMPANHA");
+      if (filtros.origem === "automacao") consulta = consulta.eq("origem_modulo", "AUTOMACAO");
+      if (filtros.origem === "contas_receber") consulta = consulta.eq("origem_modulo", "CONTA_RECEBER");
+      if (filtros.origem === "manual") consulta = consulta.eq("origem", "manual");
+
+      if (busca) {
+        const filtrosBusca = [
+          `cliente_nome.ilike.%${busca}%`,
+          `documento.ilike.%${busca}%`,
+        ];
+        if (buscaTelefone) filtrosBusca.push(`cliente_telefone.ilike.%${buscaTelefone}%`);
+        consulta = consulta.or(filtrosBusca.join(","));
+      }
+
+      const { data, error, count } = await consulta
+        .order("criado_em", { ascending: false })
+        .range(inicioPagina, fimPagina);
+
+      if (error) throw error;
+      setEnvios((data ?? []) as unknown as WhatsappEnvio[]);
+      setTotalRegistros(count ?? data?.length ?? 0);
+    } catch (error) {
       setEnvios([]);
-      setErro(error.message);
-    } else {
-      setEnvios((data ?? []) as WhatsappEnvio[]);
+      setTotalRegistros(0);
+      setErro(error instanceof Error ? error.message : "Não foi possível carregar o histórico de envios.");
+    } finally {
+      setCarregando(false);
     }
-
-    setCarregando(false);
-  }, [usuario?.id_empresa]);
+  }, [filtros, paginaAtual, usuario?.id_empresa]);
 
   useEffect(() => {
     void carregarEnvios();
   }, [carregarEnvios]);
 
+  useEffect(() => {
+    void carregarResumo();
+  }, [carregarResumo]);
+
+  useEffect(() => {
+    setPaginaAtual(1);
+  }, [filtros]);
+
   const enviosFiltrados = useMemo(() => filtrarEnvios(envios, filtros), [envios, filtros]);
   const temFiltrosAtivos = filtrosAtivos(filtros);
-
-  const resumo = useMemo(
-    () => ({
-      enviadosHoje: enviosFiltrados.filter((envio) => normalizarStatusEnvio(envio) === "enviado").length,
-      erros: enviosFiltrados.filter((envio) => normalizarStatusEnvio(envio) === "erro").length,
-      pendentes: enviosFiltrados.filter((envio) => normalizarStatusEnvio(envio) === "pendente").length,
-      total: enviosFiltrados.length,
-    }),
-    [enviosFiltrados],
-  );
+  const totalPaginas = Math.max(1, Math.ceil(totalRegistros / ITENS_POR_PAGINA_HISTORICO));
+  const labelOrigemHistorico: Record<string, string> = {
+    todas: "Todas",
+    contas_receber: "Contas a Receber",
+    aniversariantes: "Aniversariantes",
+    campanhas_promocao: "Campanha de Promoção",
+    automacao: "Automação",
+    mensagem_programada: "Mensagem Programada",
+    manual: "Manual",
+  };
+  const labelTipoHistorico: Record<string, string> = {
+    todos: "Todos",
+    whatsapp: "WhatsApp",
+    envio: "Envio",
+    reenvio: "Reenvio",
+    teste: "Teste",
+  };
+  const labelStatusHistorico: Record<string, string> = {
+    todos: "Todos",
+    erro_pendente: "Erro e Pendente",
+    enviado: "Enviado",
+    erro: "Erro",
+    pendente: "Pendente",
+  };
+  const filtrosAtivosHistorico = [
+    filtros.busca.trim() ? `Busca: ${filtros.busca.trim()}` : null,
+    filtros.dataInicial ? `Data inicial: ${formatarDataFiltro(filtros.dataInicial)}` : null,
+    filtros.dataFinal ? `Data final: ${formatarDataFiltro(filtros.dataFinal)}` : null,
+    filtros.origem !== "todas" ? `Origem: ${labelOrigemHistorico[filtros.origem] ?? filtros.origem}` : null,
+    filtros.tipoEnvio !== "todos" ? `Tipo: ${labelTipoHistorico[filtros.tipoEnvio] ?? filtros.tipoEnvio}` : null,
+    filtros.status !== "todos" ? `Status: ${labelStatusHistorico[filtros.status] ?? filtros.status}` : null,
+  ].filter((filtro): filtro is string => Boolean(filtro));
 
   const cards = [
-    { label: "Mensagens enviadas", value: resumo.enviadosHoje, icon: "sent", color: "verde", help: "Envios concluídos" },
-    { label: "Mensagens com erro", value: resumo.erros, icon: "error", color: "vermelho", help: "Falhas registradas" },
-    { label: "Mensagens pendentes", value: resumo.pendentes, icon: "pending", color: "laranja", help: "Aguardando envio" },
-    { label: "Total de envios", value: resumo.total, icon: "list", color: "azul", help: "Registros filtrados" },
+    { label: "Mensagens enviadas", value: resumo.enviados, icon: "sent", color: "verde", help: "Envios concluídos", status: "enviado" },
+    { label: "Mensagens com erro", value: resumo.erros, icon: "error", color: "vermelho", help: "Falhas registradas", status: "erro" },
+    { label: "Mensagens pendentes", value: resumo.pendentes, icon: "pending", color: "laranja", help: "Aguardando envio", status: "pendente" },
+    { label: "Total de envios", value: resumo.total, icon: "list", color: "azul", help: "Todos os registros", status: "todos" },
   ];
 
   return (
     <main className="history-page">
       <GlobalPageHeader title="Histórico de Envio de Mensagens" subtitle="Acompanhe os envios e reenvios de mensagens realizados para clientes." icon="history" actions={
-        <button className="secondary-button" type="button" onClick={carregarEnvios} disabled={carregando}>Atualizar</button>
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={() => {
+            void carregarEnvios();
+            void carregarResumo();
+          }}
+          disabled={carregando || carregandoResumo}
+        >
+          Atualizar
+        </button>
       } />
 
       <section className="summary-grid history-summary-grid" aria-label="Resumo de envios">
-        {cards.map((card) => (
-          <article className={`summary-card summary-card-${card.color}`} key={card.label}>
+        {cards.map((card) => {
+          const ativo =
+            filtros.status === card.status ||
+            (filtros.status === "erro_pendente" && (card.status === "erro" || card.status === "pendente"));
+
+          return (
+          <button
+            className={`summary-card summary-card-${card.color} history-summary-filter${ativo ? " history-summary-filter-active" : ""}`}
+            type="button"
+            key={card.label}
+            aria-pressed={ativo}
+            onClick={() => setFiltros({ ...filtros, status: card.status })}
+          >
             <div>
               <span>{card.label}</span>
-              <strong>{carregando ? "..." : card.value}</strong>
+              <strong>{carregandoResumo ? "..." : card.value}</strong>
               <small>{card.help}</small>
             </div>
             <div className="summary-card-icon" aria-hidden="true"><MetricCardIcon type={card.icon} /></div>
-          </article>
-        ))}
+          </button>
+          );
+        })}
       </section>
 
       <section className="history-filters-panel" aria-label="Filtros do historico">
@@ -443,6 +654,7 @@ export function HistoricoEnvios() {
             <span>Status</span>
             <select value={filtros.status} onChange={(event) => setFiltros({ ...filtros, status: event.target.value })}>
               <option value="todos">Todos</option>
+              <option value="erro_pendente">Erro e Pendente</option>
               <option value="enviado">Enviado</option>
               <option value="erro">Erro</option>
               <option value="pendente">Pendente</option>
@@ -450,12 +662,26 @@ export function HistoricoEnvios() {
           </label>
 
         </div>
+
+        {filtrosAtivosHistorico.length > 0 && (
+          <div className="active-filters-bar">
+            <div className="active-filters-info">
+              <span className="active-filters-label">Filtro ativo:</span>
+              {filtrosAtivosHistorico.map((filtro) => (
+                <span className="active-filter-chip" key={filtro}>{filtro}</span>
+              ))}
+            </div>
+            <button className="active-filters-clear" type="button" onClick={() => setFiltros(filtrosHistoricoLimpos)}>
+              Limpar filtros
+            </button>
+          </div>
+        )}
       </section>
 
       <section className="results-section">
         <div className="section-title">
           <h2>Historico de envios</h2>
-          <span>Resultados: {enviosFiltrados.length}</span>
+          <span>Resultados: {totalRegistros}</span>
         </div>
 
         {erro && <div className="state-box state-box-error">Erro ao carregar historico de envios.</div>}
@@ -525,12 +751,35 @@ export function HistoricoEnvios() {
                     <span className="history-error-cell" title={mostrarValor(getRetornoErroEnvio(envio))}>
                       {resumirErro(getRetornoErroEnvio(envio))}
                     </span>
+                    {renderTentativasHistorico(envio)}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+
+        {totalRegistros > 0 && (
+          <nav className="receivables-pagination" aria-label="Paginação do histórico de envios">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={carregando || paginaAtual <= 1}
+              onClick={() => setPaginaAtual((pagina) => Math.max(1, pagina - 1))}
+            >
+              Anterior
+            </button>
+            <span>Página <strong>{paginaAtual}</strong> de <strong>{totalPaginas}</strong></span>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={carregando || paginaAtual >= totalPaginas}
+              onClick={() => setPaginaAtual((pagina) => Math.min(totalPaginas, pagina + 1))}
+            >
+              Próxima
+            </button>
+          </nav>
+        )}
       </section>
     </main>
   );

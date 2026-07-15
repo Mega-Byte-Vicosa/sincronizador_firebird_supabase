@@ -55,15 +55,20 @@ const groups: Array<{ title: string; items: SidebarItem[] }> = [
   },
   {
     title: "Sistema",
-    items: [{ label: "Configuracoes", path: "/configuracoes", icon: "S" }],
+    items: [{ label: "Configurações", icon: "S", children: [
+      { label: "Geral", path: "/configuracoes" },
+      { label: "Modelos", path: "/configuracoes/modelos" },
+    ] }],
   },
 ];
 
 export function Sidebar({ activePath, collapsed, mobileOpen, onCollapse, onNavigate }: SidebarProps) {
   const [campaignsOpen, setCampaignsOpen] = useState(() => activePath.startsWith("/campanhas-promocao"));
+  const [settingsOpen, setSettingsOpen] = useState(() => activePath.startsWith("/configuracoes"));
 
   useEffect(() => {
     if (activePath.startsWith("/campanhas-promocao")) setCampaignsOpen(true);
+    if (activePath.startsWith("/configuracoes")) setSettingsOpen(true);
   }, [activePath]);
 
   return (
@@ -86,7 +91,8 @@ export function Sidebar({ activePath, collapsed, mobileOpen, onCollapse, onNavig
             {group.items.map((item) => {
               if (item.children) {
                 const active = item.children.some((child) => activePath === child.path);
-                const open = campaignsOpen;
+                const configuracoes = item.label === "Configurações";
+                const open = configuracoes ? settingsOpen : campaignsOpen;
 
                 return (
                   <div className={`sidebar-submenu-group${open ? " sidebar-submenu-group-open" : ""}`} key={item.label}>
@@ -98,10 +104,11 @@ export function Sidebar({ activePath, collapsed, mobileOpen, onCollapse, onNavig
                       onClick={() => {
                         if (collapsed) {
                           onCollapse();
-                          setCampaignsOpen(true);
+                          if (configuracoes) setSettingsOpen(true); else setCampaignsOpen(true);
                           return;
                         }
-                        setCampaignsOpen((current) => !current);
+                        if (configuracoes) setSettingsOpen((current) => !current);
+                        else setCampaignsOpen((current) => !current);
                       }}
                     >
                       <span className="sidebar-icon" aria-hidden="true"><MenuIcon icon={item.icon} /></span>

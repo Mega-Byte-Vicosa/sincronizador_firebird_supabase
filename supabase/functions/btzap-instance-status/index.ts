@@ -67,6 +67,8 @@ Deno.serve(async (req) => {
       ultimo_profile_pic_url: dados.profilePicUrl,
       ultimo_connected: dados.connected,
       ultimo_logged_in: dados.loggedIn,
+      ultimo_phone_number: dados.phoneNumber,
+      ultimo_raw_phone_number: dados.rawPhoneNumber ? String(dados.rawPhoneNumber) : null,
       atualizado_em: agora,
     };
 

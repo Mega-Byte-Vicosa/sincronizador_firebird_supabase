@@ -7,9 +7,12 @@ import { useAuth } from "../auth/AuthContext";
 import type { ModeloMensagem } from "../types/modeloMensagem";
 import {
   buscarTodosModelosMensagemAtivos,
+  buscarConfigModelosMensagem,
+  CONFIG_MODELOS_PADRAO,
   getChaveModeloMensagem,
   montarMensagemModeloContaReceber,
   selecionarModeloPadraoContaReceber,
+  type ConfigModelosMensagem,
 } from "../utils/modelosMensagem";
 import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 
@@ -48,6 +51,7 @@ interface RevisaoWhatsapp {
   modeloSelecionado: string;
   modeloSugerido: string | null;
   avisoModelo: string | null;
+  configModelos: ConfigModelosMensagem;
   carregandoModelos: boolean;
 }
 
@@ -1004,7 +1008,6 @@ export function ContasAReceber() {
   const [busca, setBusca] = useState("");
   const [vencimentoDe, setVencimentoDe] = useState(getPrimeiroDiaMesAtual);
   const [vencimentoAte, setVencimentoAte] = useState(getUltimoDiaMesAtual);
-  const [tipoConta, setTipoConta] = useState<TipoConta>("Todos");
   const [outroFiltro, setOutroFiltro] = useState<OutroFiltro>("Vencidas e vencendo hoje");
   const [paginaAtual, setPaginaAtual] = useState(1);
   const [totalRegistros, setTotalRegistros] = useState(0);
@@ -1054,7 +1057,7 @@ export function ContasAReceber() {
       p_busca: busca.trim() || null,
       p_vencimento_de: vencimentoDe || null,
       p_vencimento_ate: vencimentoAte || null,
-      p_tipo_conta: tipoConta === "Todos" ? null : tipoConta,
+      p_tipo_conta: null,
       p_status: outroFiltro,
       p_pagina: paginaAtual,
       p_tamanho_pagina: 50,
@@ -1080,7 +1083,7 @@ export function ContasAReceber() {
     }
 
     setCarregando(false);
-  }, [busca, carregarAgendamentos, outroFiltro, paginaAtual, tipoConta, usuario?.id_empresa, vencimentoAte, vencimentoDe]);
+  }, [busca, carregarAgendamentos, outroFiltro, paginaAtual, usuario?.id_empresa, vencimentoAte, vencimentoDe]);
 
   useEffect(() => {
     void carregarContas();
@@ -1088,10 +1091,24 @@ export function ContasAReceber() {
 
   useEffect(() => {
     setPaginaAtual(1);
-  }, [busca, outroFiltro, tipoConta, vencimentoAte, vencimentoDe]);
+  }, [busca, outroFiltro, vencimentoAte, vencimentoDe]);
 
   const contasFiltradas = contas;
   const totalPaginas = Math.max(1, Math.ceil(totalRegistros / 50));
+  const filtrosAtivosContas = [
+    busca.trim() ? `Busca: ${busca.trim()}` : null,
+    vencimentoDe ? `Vencimento de: ${formatarData(vencimentoDe)}` : null,
+    vencimentoAte ? `Vencimento até: ${formatarData(vencimentoAte)}` : null,
+    outroFiltro !== "Todos" ? `Vencimento: ${outroFiltro}` : null,
+  ].filter((filtro): filtro is string => Boolean(filtro));
+
+  function limparFiltrosContas() {
+    setBusca("");
+    setVencimentoDe("");
+    setVencimentoAte("");
+    setOutroFiltro("Todos");
+    setPaginaAtual(1);
+  }
 
   function abrirDetalhes(conta: ContaReceber) {
     setContaSelecionada(conta);
@@ -1141,6 +1158,7 @@ export function ContasAReceber() {
       modeloSelecionado: "",
       modeloSugerido: null,
       avisoModelo: null,
+      configModelos: CONFIG_MODELOS_PADRAO,
       carregandoModelos: true,
     });
 
@@ -1150,13 +1168,16 @@ export function ContasAReceber() {
     }
 
     try {
-      const modelos = await buscarTodosModelosMensagemAtivos(usuario.id_empresa);
+      const [modelos, configModelos] = await Promise.all([
+        buscarTodosModelosMensagemAtivos(usuario.id_empresa),
+        buscarConfigModelosMensagem(),
+      ]);
       const modeloSugerido = selecionarModeloPadraoContaReceber(conta, modelos);
       const chaveSugerida = modeloSugerido ? getChaveModeloMensagem(modeloSugerido) : "";
       const mensagemModelo = modeloSugerido
         ? montarMensagemModeloContaReceber(conta, modeloSugerido, {
-            nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
-          })
+          nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
+          }, configModelos)
         : montarMensagemCobrancaWhatsapp(conta);
       setRevisaoWhatsapp((atual) => atual?.conta.id_ctarec === conta.id_ctarec
         ? {
@@ -1167,6 +1188,7 @@ export function ContasAReceber() {
             avisoModelo: modelos.length > 0 && !modeloSugerido
               ? "Nenhum modelo padrão encontrado para esta situação. Selecione um modelo manualmente."
               : null,
+            configModelos,
             mensagem: mensagemModelo,
             carregandoModelos: false,
           }
@@ -1184,7 +1206,7 @@ export function ContasAReceber() {
     const mensagem = modelo
       ? montarMensagemModeloContaReceber(revisaoWhatsapp.conta, modelo, {
           nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
-        })
+        }, revisaoWhatsapp.configModelos)
       : revisaoWhatsapp.mensagem;
     setRevisaoWhatsapp({ ...revisaoWhatsapp, modeloSelecionado: idModelo, mensagem, erro: null, avisoModelo: null });
   }
@@ -1238,7 +1260,12 @@ export function ContasAReceber() {
 
     if (envioWhatsappPendente(data)) {
       setRevisaoWhatsapp(null);
-      setFeedbackWhatsapp({ mensagem: data?.message ?? data?.mensagem ?? "Mensagem registrada como pendente.", tipo: "informativo" });
+      const detalheProgramacao = data?.mensagemProgramadaCriada
+        ? " Uma nova tentativa foi criada em Mensagens Programadas."
+        : data?.mensagemProgramadaAtualizada
+          ? " A tentativa existente em Mensagens Programadas foi atualizada."
+          : "";
+      setFeedbackWhatsapp({ mensagem: `${data?.message ?? data?.mensagem ?? "Mensagem registrada como pendente."}${detalheProgramacao}`, tipo: "informativo" });
       await carregarContas();
       return;
     }
@@ -1342,17 +1369,6 @@ export function ContasAReceber() {
         </label>
 
         <label>
-          <span>Tipo da conta</span>
-          <select value={tipoConta} onChange={(event) => setTipoConta(event.target.value as TipoConta)}>
-            <option value="Todos">Todos</option>
-            <option value="N">N</option>
-            <option value="C">C</option>
-            <option value="D">D</option>
-            <option value="E">E</option>
-          </select>
-        </label>
-
-        <label>
           <span>Vencimento</span>
           <select value={outroFiltro} onChange={(event) => setOutroFiltro(event.target.value as OutroFiltro)}>
             <option value="Vencidas e vencendo hoje">Vencidas e vencendo hoje</option>
@@ -1364,6 +1380,20 @@ export function ContasAReceber() {
             <option value="Recebidas">Recebidas</option>
           </select>
         </label>
+
+        {filtrosAtivosContas.length > 0 && (
+          <div className="active-filters-bar filters-active-full">
+            <div className="active-filters-info">
+              <span className="active-filters-label">Filtro ativo:</span>
+              {filtrosAtivosContas.map((filtro) => (
+                <span className="active-filter-chip" key={filtro}>{filtro}</span>
+              ))}
+            </div>
+            <button className="active-filters-clear" type="button" onClick={limparFiltrosContas}>
+              Limpar filtros
+            </button>
+          </div>
+        )}
       </section>
 
       {feedbackWhatsapp && (

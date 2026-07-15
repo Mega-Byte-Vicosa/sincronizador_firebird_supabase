@@ -26,9 +26,18 @@ export interface MensagemProgramada {
   data_envio: string;
   hora_envio: string;
   executar_em: string;
+  executar_primeira_tentativa_em?: string | null;
+  executar_segunda_tentativa_em?: string | null;
   processando_em: string | null;
   ultima_tentativa_em: string | null;
   tentativas_envio: number;
+  tentativa_atual?: number | null;
+  gerada_por_bloqueio_parametros?: boolean | null;
+  motivo_pendencia?: string | null;
+  origem_tentativa?: string | null;
+  conta_receber_id?: string | null;
+  documento_origem?: string | null;
+  historico_envio_id?: string | null;
   repetir: boolean;
   tipo_repeticao: TipoRepeticaoMensagemProgramada | null;
   intervalo_repeticao: number | null;

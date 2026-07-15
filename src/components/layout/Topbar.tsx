@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "../../auth/AuthContext";
 import { GlobalHeaderIcon } from "./GlobalPageHeader";
 import { supabase } from "../../lib/supabaseClient";
@@ -19,10 +19,16 @@ const breadcrumbPorRota: Record<string, [string, string]> = {
   "/mensagens-programadas": ["Comunicação", "Mensagens Programadas"],
   "/historico-envios": ["Sistema", "Histórico"],
   "/configuracoes": ["Sistema", "Configurações"],
+  "/configuracoes/modelos": ["Configurações", "Modelos"],
 };
 
 export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
   const { usuario, sair, alterarSenha } = useAuth();
+  const [infoSincronizacao, setInfoSincronizacao] = useState<{ ultima: string | null; proxima: string | null; carregando: boolean }>({
+    ultima: null,
+    proxima: null,
+    carregando: true,
+  });
   const [saindo, setSaindo] = useState(false);
   const [modalSenhaAberto, setModalSenhaAberto] = useState(false);
   const [senhaAtual, setSenhaAtual] = useState("");
@@ -49,6 +55,57 @@ export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
     ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(usuario.ultimo_login_anterior))
     : "Primeiro acesso";
   const [, paginaAtual] = breadcrumbPorRota[activePath] ?? ["Início", "Dashboard"];
+
+  useEffect(() => {
+    let ativo = true;
+
+    async function carregarSincronizacao() {
+      if (!usuario?.id_empresa) {
+        if (ativo) setInfoSincronizacao({ ultima: null, proxima: null, carregando: false });
+        return;
+      }
+
+      setInfoSincronizacao((atual) => ({ ...atual, carregando: true }));
+      const { data, error } = await supabase
+        .from("firebird_contas_receber")
+        .select("sincronizado_em")
+        .eq("id_empresa", usuario.id_empresa)
+        .not("sincronizado_em", "is", null)
+        .order("sincronizado_em", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!ativo) return;
+      if (error || !data?.sincronizado_em) {
+        setInfoSincronizacao({ ultima: null, proxima: null, carregando: false });
+        return;
+      }
+
+      const ultima = new Date(data.sincronizado_em);
+      const proxima = new Date(ultima);
+      proxima.setMinutes(proxima.getMinutes() + 10);
+      setInfoSincronizacao({
+        ultima: ultima.toISOString(),
+        proxima: proxima.toISOString(),
+        carregando: false,
+      });
+    }
+
+    void carregarSincronizacao();
+    const timer = window.setInterval(() => void carregarSincronizacao(), 60_000);
+
+    return () => {
+      ativo = false;
+      window.clearInterval(timer);
+    };
+  }, [usuario?.id_empresa]);
+
+  function formatarSincronizacao(valor: string | null) {
+    if (!valor) return "-";
+    const data = new Date(valor);
+    if (Number.isNaN(data.getTime())) return "-";
+    return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(data);
+  }
 
   async function handleLogout() {
     setSaindo(true);
@@ -154,6 +211,16 @@ export function Topbar({ activePath, onNavigate, onOpenMenu }: TopbarProps) {
         </div>
 
         <div className="page-global-header-actions">
+          <div className="page-global-sync-card" title="Horários estimados com base na última sincronização de Contas a Receber.">
+            <div>
+              <span>Última Sincronização</span>
+              <strong>{infoSincronizacao.carregando ? "..." : formatarSincronizacao(infoSincronizacao.ultima)}</strong>
+            </div>
+            <div>
+              <span>Próxima Sincronização</span>
+              <strong>{infoSincronizacao.carregando ? "..." : formatarSincronizacao(infoSincronizacao.proxima)}</strong>
+            </div>
+          </div>
           <div className="page-global-user-menu">
             <button className="page-global-user-card" type="button" onClick={() => setMenuUsuarioAberto((aberto) => !aberto)} aria-expanded={menuUsuarioAberto}>
               <div className="page-global-avatar" aria-hidden="true">{iniciais.charAt(0) || "M"}<span /></div>

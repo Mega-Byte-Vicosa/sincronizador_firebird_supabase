@@ -6,6 +6,32 @@ const moeda = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL
 const origemModeloCobranca = "cobranca";
 const origemModeloGeral = "geral";
 
+export interface ConfigModelosMensagem {
+  cliente_negrito: boolean;
+  empresa_negrito: boolean;
+}
+
+export const CONFIG_MODELOS_PADRAO: ConfigModelosMensagem = { cliente_negrito: true, empresa_negrito: true };
+const variaveisCliente = new Set(["cliente", "nome", "nome_cliente", "cliente_nome", "razao_cliente"]);
+const variaveisEmpresa = new Set(["empresa", "nome_empresa", "empresa_nome", "razao_social", "fantasia", "nome_fantasia"]);
+
+export function aplicarNegritoWhatsApp(valor: string) {
+  const texto = String(valor ?? "").trim();
+  if (!texto || (texto.startsWith("*") && texto.endsWith("*"))) return texto;
+  return `*${texto}*`;
+}
+
+export async function buscarConfigModelosMensagem(): Promise<ConfigModelosMensagem> {
+  const token = sessionStorage.getItem("consulta_clipp_pro_saas_session") ?? "";
+  const { data, error } = await supabase.rpc("fn_obter_config_modelos", { p_token: token });
+  if (error) throw error;
+  const config = data as Partial<ConfigModelosMensagem> | null;
+  return {
+    cliente_negrito: config?.cliente_negrito !== false,
+    empresa_negrito: config?.empresa_negrito !== false,
+  };
+}
+
 function dataISO(valor: string | null | undefined) {
   const match = String(valor ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
   return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
@@ -76,8 +102,15 @@ export function prepararCorpoModeloContaReceber(conta: ContaReceber, corpo: stri
     .trim();
 }
 
-export function aplicarVariaveisModelo(texto: string, variaveis: Record<string, string>) {
-  return texto.replace(/\{\{(\w+)\}\}/g, (_, chave: string) => variaveis[chave] ?? "");
+export function aplicarVariaveisModelo(texto: string, variaveis: Record<string, string>, config = CONFIG_MODELOS_PADRAO) {
+  return texto.replace(/(\*)?\{\{\s*(\w+)\s*\}\}(\*)?/g, (_, antes: string | undefined, chaveOriginal: string, depois: string | undefined) => {
+    const chave = chaveOriginal.toLowerCase();
+    const valor = variaveis[chave] ?? "";
+    if (antes === "*" && depois === "*") return aplicarNegritoWhatsApp(valor);
+    if (config.cliente_negrito && variaveisCliente.has(chave)) return aplicarNegritoWhatsApp(valor);
+    if (config.empresa_negrito && variaveisEmpresa.has(chave)) return aplicarNegritoWhatsApp(valor);
+    return `${antes ?? ""}${valor}${depois ?? ""}`;
+  });
 }
 
 export function montarVariaveisContaReceber(
@@ -156,10 +189,12 @@ export function montarMensagemModeloContaReceber(
   conta: ContaReceber,
   modelo: ModeloMensagem,
   empresa?: { nome?: string | null; telefone?: string | null },
+  config: ConfigModelosMensagem = CONFIG_MODELOS_PADRAO,
 ) {
   return aplicarVariaveisModelo(
     prepararCorpoModeloContaReceber(conta, modelo.corpo),
     montarVariaveisContaReceber(conta, empresa),
+    config,
   );
 }
 

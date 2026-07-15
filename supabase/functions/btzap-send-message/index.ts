@@ -1,6 +1,7 @@
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { sendBtzapMessage, validateBtzapConfig } from "../_shared/btzapClient.ts";
 import { createSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
+import { criarOuAtualizarMensagemProgramadaPorBloqueio, calcularPrimeiraTentativaBloqueio } from "../_shared/scheduledParameterBlocks.ts";
 import { mensagemRetornoEnvio, motivoPendenteEnvio, normalizarTipoEnvio, processarEnvioWhatsApp } from "../_shared/whatsappSendGuard.ts";
 
 function textoErro(valor: unknown) { return valor instanceof Error ? valor.message : typeof valor === "string" ? valor : JSON.stringify(valor); }
@@ -82,15 +83,40 @@ Deno.serve(async (req) => {
 
     if (!resultado.enviado) {
       const pendente = motivoPendenteEnvio(resultado.motivo);
-      const mensagem = pendente ? mensagemRetornoEnvio(resultado.motivo, resultado.detalhe) : resultado.motivo === "erro_btzap" ? resultado.detalhe : mensagemBloqueio(resultado.motivo);
+      const mensagemRetorno = pendente ? mensagemRetornoEnvio(resultado.motivo, resultado.detalhe) : resultado.motivo === "erro_btzap" ? resultado.detalhe : mensagemBloqueio(resultado.motivo);
       if (conta && idCtarec) {
         await supabase.from("firebird_contas_receber").update({
           whatsapp_status: pendente ? "pendente" : "erro",
-          whatsapp_ultimo_erro: mensagem,
+          whatsapp_ultimo_erro: mensagemRetorno,
           whatsapp_ultimo_tipo: operacaoEnvio === "reenvio" ? "reenvio" : "envio",
           whatsapp_ultimo_envio_id: resultado.historicoId,
           whatsapp_status_exibicao: pendente ? String(resultado.motivo || "pendente") : "erro",
         }).eq("id_empresa", empresaId).eq("id_ctarec", idCtarec);
+      }
+      let mensagemProgramada: Awaited<ReturnType<typeof criarOuAtualizarMensagemProgramadaPorBloqueio>> | null = null;
+      if (pendente && conta && idCtarec) {
+        const primeiraTentativa = calcularPrimeiraTentativaBloqueio({
+          proximaTentativaEm: resultado.proximaTentativaEm,
+          parametro: resultado.parametro,
+        });
+        mensagemProgramada = await criarOuAtualizarMensagemProgramadaPorBloqueio({
+          supabase,
+          empresaId,
+          clienteId,
+          clienteNome: conta.cliente_nome ?? null,
+          telefone,
+          mensagem,
+          referenciaId: idCtarec,
+          contaReceberId: idCtarec,
+          documentoOrigem: conta.documento ?? null,
+          tipoEnvio,
+          motivoPendencia: String(resultado.motivo || "pendente"),
+          erroEnvio: mensagemRetorno,
+          proximaTentativaEm: primeiraTentativa,
+          parametro: resultado.parametro,
+          modeloId,
+          historicoEnvioId: resultado.historicoId,
+        });
       }
       return jsonResponse({
         success: pendente,
@@ -98,10 +124,15 @@ Deno.serve(async (req) => {
         status: pendente ? "pendente" : "erro",
         bloqueado: true,
         motivo: resultado.motivo,
-        mensagem,
-        message: mensagem,
+        mensagem: mensagemRetorno,
+        message: mensagemRetorno,
         proximaTentativaEm: resultado.proximaTentativaEm,
         proxima_tentativa_em: resultado.proximaTentativaEm,
+        mensagemProgramadaCriada: mensagemProgramada?.criada ?? false,
+        mensagemProgramadaAtualizada: mensagemProgramada?.atualizada ?? false,
+        mensagemProgramadaId: mensagemProgramada?.id ?? null,
+        executarPrimeiraTentativaEm: mensagemProgramada?.executarPrimeiraTentativaEm ?? null,
+        executarSegundaTentativaEm: mensagemProgramada?.executarSegundaTentativaEm ?? null,
       });
     }
     if (conta && idCtarec) {

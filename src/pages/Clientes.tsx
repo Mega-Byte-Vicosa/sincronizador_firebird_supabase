@@ -41,6 +41,16 @@ interface ClienteSincronizado {
   atualizado_em: string | null;
 }
 
+interface ResumoClientesServidor {
+  total: number;
+  semTelefone: number;
+  restritos: number;
+  campanhaPermitida: number;
+  campanhaNaoPermitida: number;
+  aniversariantesMes: number;
+  semCompra90Dias: number;
+}
+
 interface SituacaoCliente {
   tipo: "campanha_permitida" | "campanha_nao_permitida" | "telefone_invalido" | "contato_restrito";
   label: string;
@@ -51,6 +61,17 @@ interface SituacaoMovimentoCliente {
   label: string;
   className: string;
 }
+
+const ITENS_POR_PAGINA_CLIENTES = 100;
+const resumoClientesInicial: ResumoClientesServidor = {
+  total: 0,
+  semTelefone: 0,
+  restritos: 0,
+  campanhaPermitida: 0,
+  campanhaNaoPermitida: 0,
+  aniversariantesMes: 0,
+  semCompra90Dias: 0,
+};
 
 const motivosRestricao = [
   "Cliente pediu para não receber mensagens",
@@ -292,11 +313,27 @@ export function Clientes() {
   const { usuario, atualizarPermissoesCliente } = useAuth();
   const [clientes, setClientes] = useState<ClienteSincronizado[]>([]);
   const [busca, setBusca] = useState("");
+  const [buscaAplicada, setBuscaAplicada] = useState("");
   const [filtroSituacao, setFiltroSituacao] = useState<FiltroSituacao>("todos");
+  const [paginaAtual, setPaginaAtual] = useState(1);
+  const [totalClientesFiltrados, setTotalClientesFiltrados] = useState(0);
+  const [resumoServidor, setResumoServidor] = useState<ResumoClientesServidor>(resumoClientesInicial);
   const [clienteEmEdicao, setClienteEmEdicao] = useState<ClienteSincronizado | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setBuscaAplicada(busca.trim());
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+  }, [busca]);
+
+  useEffect(() => {
+    setPaginaAtual(1);
+  }, [buscaAplicada, filtroSituacao]);
 
   const carregarClientes = useCallback(async () => {
     setCarregando(true);
@@ -304,48 +341,53 @@ export function Clientes() {
 
     if (!usuario?.id_empresa) {
       setClientes([]);
+      setTotalClientesFiltrados(0);
+      setResumoServidor(resumoClientesInicial);
       setCarregando(false);
       return;
     }
 
-    const { data, error } = await supabase
-      .from("tab_cliente")
-      .select(
-        "id_empresa, id_cliente, dt_cadastro, dt_nascto, nome, dt_pricomp, dt_ultcomp, ddd_celul, fone_celul, email_cont, sincronizado_em, permite_campanha, permite_cobranca_aviso, contato_restrito, motivo_restricao, restrito_em, atualizado_em",
-      )
-      .eq("id_empresa", usuario.id_empresa)
-      .order("nome", { ascending: true });
+    const token = sessionStorage.getItem("consulta_clipp_pro_saas_session") ?? "";
+    const { data, error } = await supabase.rpc("fn_clientes_consulta", {
+      p_token: token,
+      p_busca: buscaAplicada || null,
+      p_filtro: filtroSituacao,
+      p_pagina: paginaAtual,
+      p_tamanho_pagina: ITENS_POR_PAGINA_CLIENTES,
+    });
 
     if (error) {
-      setClientes([]);
       setErro(error.message);
     } else {
-      setClientes((data ?? []) as ClienteSincronizado[]);
+      const resultado = data as {
+        items?: ClienteSincronizado[];
+        totalFiltrado?: number;
+        resumo?: Partial<ResumoClientesServidor>;
+      } | null;
+
+      setClientes(resultado?.items ?? []);
+      setTotalClientesFiltrados(Number(resultado?.totalFiltrado ?? 0));
+      setResumoServidor({
+        ...resumoClientesInicial,
+        ...(resultado?.resumo ?? {}),
+      });
     }
 
     setCarregando(false);
-  }, [usuario?.id_empresa]);
+  }, [buscaAplicada, filtroSituacao, paginaAtual, usuario?.id_empresa]);
 
   useEffect(() => {
     void carregarClientes();
   }, [carregarClientes]);
 
-  const clientesFiltrados = useMemo(
-    () =>
-      clientes.filter(
-        (cliente) => clienteAtendeBusca(cliente, busca) && clienteAtendeSituacao(cliente, filtroSituacao),
-      ),
-    [busca, clientes, filtroSituacao],
-  );
+  const clientesFiltrados = clientes;
 
   const resumoClientes = useMemo(() => {
-    const situacoes = clientes.map((cliente) => obterSituacaoCliente(cliente).tipo);
-
     return [
       {
         titulo: "TOTAL DE CLIENTES",
         descricao: "Clientes cadastrados",
-        valor: clientes.length,
+        valor: resumoServidor.total,
         classe: "client-summary-primary",
         filtro: "todos" as const,
         icone: "users" as const,
@@ -353,7 +395,7 @@ export function Clientes() {
       {
         titulo: "SEM TELEFONE",
         descricao: "Clientes sem celular válido",
-        valor: clientes.filter((cliente) => !telefoneValido(cliente)).length,
+        valor: resumoServidor.semTelefone,
         classe: "client-summary-warning",
         filtro: "telefone_invalido" as const,
         icone: "phone-off" as const,
@@ -361,7 +403,7 @@ export function Clientes() {
       {
         titulo: "CLIENTES RESTRITOS",
         descricao: "Bloqueados para envio",
-        valor: clientes.filter((cliente) => cliente.contato_restrito === true).length,
+        valor: resumoServidor.restritos,
         classe: "client-summary-danger",
         filtro: "contato_restrito" as const,
         icone: "ban" as const,
@@ -369,7 +411,7 @@ export function Clientes() {
       {
         titulo: "CAMPANHA PERMITIDA",
         descricao: "Liberados para campanhas",
-        valor: situacoes.filter((situacao) => situacao === "campanha_permitida").length,
+        valor: resumoServidor.campanhaPermitida,
         classe: "client-summary-success",
         filtro: "campanha_permitida" as const,
         icone: "check-circle" as const,
@@ -377,7 +419,7 @@ export function Clientes() {
       {
         titulo: "CAMPANHA NÃO PERMITIDA",
         descricao: "Não liberados para campanhas",
-        valor: situacoes.filter((situacao) => situacao === "campanha_nao_permitida").length,
+        valor: resumoServidor.campanhaNaoPermitida,
         classe: "client-summary-muted",
         filtro: "campanha_nao_permitida" as const,
         icone: "x-circle" as const,
@@ -385,7 +427,7 @@ export function Clientes() {
       {
         titulo: "ANIVERSARIANTES DO MÊS",
         descricao: "Clientes do mês atual",
-        valor: clientes.filter(clienteDoMesAtual).length,
+        valor: resumoServidor.aniversariantesMes,
         classe: "client-summary-info",
         filtro: "aniversariantes_mes" as const,
         icone: "cake" as const,
@@ -393,13 +435,30 @@ export function Clientes() {
       {
         titulo: "SEM COMPRA HÁ MAIS DE 90 DIAS",
         descricao: "Sem movimentação recente",
-        valor: clientes.filter(clienteSemCompraMaisDe90Dias).length,
+        valor: resumoServidor.semCompra90Dias,
         classe: "client-summary-orange",
         filtro: "sem_compra_90_dias" as const,
         icone: "history" as const,
       },
     ];
-  }, [clientes]);
+  }, [resumoServidor]);
+
+  const totalPaginas = Math.max(1, Math.ceil(totalClientesFiltrados / ITENS_POR_PAGINA_CLIENTES));
+  const primeiroClienteExibido =
+    totalClientesFiltrados === 0 ? 0 : (paginaAtual - 1) * ITENS_POR_PAGINA_CLIENTES + 1;
+  const ultimoClienteExibido = Math.min(paginaAtual * ITENS_POR_PAGINA_CLIENTES, totalClientesFiltrados);
+  const filtrosAtivosClientes = [
+    busca.trim() ? `Busca: ${busca.trim()}` : null,
+    filtroSituacao !== "todos"
+      ? `Situação: ${resumoClientes.find((card) => card.filtro === filtroSituacao)?.titulo ?? filtroSituacao}`
+      : null,
+  ].filter((filtro): filtro is string => Boolean(filtro));
+
+  function limparFiltrosClientes() {
+    setBusca("");
+    setFiltroSituacao("todos");
+    setPaginaAtual(1);
+  }
 
   function atualizarClienteNaLista(clienteAtualizado: ClienteSincronizado) {
     setClientes((atuais) =>
@@ -440,6 +499,7 @@ export function Clientes() {
       atualizarClienteNaLista(resultado.cliente as ClienteSincronizado);
       setFeedback("Permissões de contato atualizadas com sucesso.");
       setClienteEmEdicao(null);
+      void carregarClientes();
     }
 
     return resultado;
@@ -462,7 +522,7 @@ export function Clientes() {
           >
             <div className="client-summary-copy">
               <span>{card.titulo}</span>
-              <strong>{carregando ? "..." : card.valor}</strong>
+              <strong>{card.valor}</strong>
               <small>{card.descricao}</small>
             </div>
             <div className="client-summary-icon" aria-hidden="true">
@@ -483,6 +543,27 @@ export function Clientes() {
               onChange={(event) => setBusca(event.target.value)}
             />
           </label>
+
+          <div className="active-filters-bar clients-active-filters-bar">
+            <div className="active-filters-info">
+              <span className="active-filters-label">Filtro ativo:</span>
+              {filtrosAtivosClientes.length > 0 ? (
+                filtrosAtivosClientes.map((filtro) => (
+                  <span className="active-filter-chip" key={filtro}>{filtro}</span>
+                ))
+              ) : (
+                <span className="active-filter-chip active-filter-chip-muted">Nenhum filtro aplicado</span>
+              )}
+            </div>
+            <button
+              className="active-filters-clear"
+              type="button"
+              onClick={limparFiltrosClientes}
+              disabled={filtrosAtivosClientes.length === 0}
+            >
+              Limpar filtros
+            </button>
+          </div>
         </div>
       </section>
 
@@ -491,7 +572,7 @@ export function Clientes() {
       <section className="results-section">
         <div className="section-title">
           <h2>Clientes sincronizados</h2>
-          <span>{clientesFiltrados.length} cliente(s)</span>
+          <span>{totalClientesFiltrados} cliente(s)</span>
         </div>
 
         {erro && <div className="state-box state-box-error">Erro ao carregar clientes.</div>}
@@ -592,6 +673,35 @@ export function Clientes() {
               );
             })}
         </div>
+
+        {!carregando && !erro && totalClientesFiltrados > 0 && (
+          <nav className="receivables-pagination" aria-label="Paginação de clientes">
+            <span>
+              Mostrando <strong>{primeiroClienteExibido}</strong> a <strong>{ultimoClienteExibido}</strong> de{" "}
+              <strong>{totalClientesFiltrados}</strong> cliente(s)
+              {buscaAplicada ? " encontrado(s)" : ""}
+            </span>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => setPaginaAtual((pagina) => Math.max(1, pagina - 1))}
+              disabled={paginaAtual <= 1 || carregando}
+            >
+              Anterior
+            </button>
+            <span>
+              Página <strong>{paginaAtual}</strong> de <strong>{totalPaginas}</strong>
+            </span>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => setPaginaAtual((pagina) => Math.min(totalPaginas, pagina + 1))}
+              disabled={paginaAtual >= totalPaginas || carregando}
+            >
+              Próxima
+            </button>
+          </nav>
+        )}
       </section>
 
       {clienteEmEdicao && (

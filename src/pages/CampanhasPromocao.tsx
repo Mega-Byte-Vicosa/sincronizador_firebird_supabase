@@ -3,7 +3,13 @@ import { useAuth } from "../auth/AuthContext";
 import { MetricCardIcon } from "../components/layout/MetricCardIcon";
 import { supabase } from "../lib/supabaseClient";
 import type { ModeloMensagem } from "../types/modeloMensagem";
-import { buscarModelosMensagem } from "../utils/modelosMensagem";
+import {
+  aplicarVariaveisModelo,
+  buscarConfigModelosMensagem,
+  buscarModelosMensagem,
+  CONFIG_MODELOS_PADRAO,
+  type ConfigModelosMensagem,
+} from "../utils/modelosMensagem";
 import { GlobalPageHeader } from "../components/layout/GlobalPageHeader";
 
 type TipoComunicacao = "whatsapp" | "email" | "instagram";
@@ -35,7 +41,6 @@ interface Campanha {
   automatizada: boolean;
   publico_dinamico: boolean;
   tipo_automacao: string | null;
-  automacao_dias_carencia: number | null;
   automacao_dias_antes_vencimento: number | null;
   automacao_dias_sem_compra: number | null;
   automacao_dias_pos_compra: number | null;
@@ -70,6 +75,58 @@ interface Campanha {
   criado_em: string;
   atualizado_em: string;
 }
+
+const ITENS_POR_PAGINA_CAMPANHAS = 100;
+
+const CAMPANHAS_SELECT = [
+  "id",
+  "id_empresa",
+  "nome",
+  "objetivo",
+  "publico_alvo",
+  "filtros_publico",
+  "tags_publico",
+  "mensagem",
+  "id_modelo_mensagem",
+  "tipo_comunicacao",
+  "status",
+  "automatizada",
+  "publico_dinamico",
+  "tipo_automacao",
+  "automacao_dias_antes_vencimento",
+  "automacao_dias_sem_compra",
+  "automacao_dias_pos_compra",
+  "automacao_repeticao_tipo",
+  "automacao_dias_semana",
+  "automacao_meses",
+  "automacao_horarios",
+  "automacao_timezone",
+  "campanha_continua",
+  "termina_em",
+  "automacao_status",
+  "automacao_ultima_execucao_em",
+  "automacao_proxima_execucao_em",
+  "automacao_total_envios",
+  "automacao_total_erros",
+  "data_hora_criacao",
+  "data_hora_agendamento",
+  "data_hora_inicio_envio",
+  "data_hora_fim_envio",
+  "percentual_envio",
+  "total_destinatarios",
+  "total_enviados",
+  "total_falhas",
+  "intervalo_envio_segundos",
+  "arquivo_url",
+  "arquivo_nome",
+  "arquivo_tipo",
+  "aos_cuidados",
+  "empresa_destino",
+  "observacoes",
+  "criado_por",
+  "criado_em",
+  "atualizado_em",
+].join(",");
 
 interface ClienteCampanha {
   id_empresa: string | null;
@@ -115,6 +172,15 @@ interface FilaCampanha {
   ativo: boolean | null;
 }
 
+interface AutomacaoExecucaoItemCampanha {
+  id_campanha: string | null;
+  status: "pendente" | "enviado" | "erro" | string | null;
+  ultima_tentativa_em: string | null;
+  proxima_tentativa_em: string | null;
+  atualizado_em: string | null;
+  criado_em: string | null;
+}
+
 interface ModeloMensagemAtivo {
   id: string;
   modelo_msg_titulo: string;
@@ -132,7 +198,6 @@ interface FormCampanha {
   empresaDestino: string;
   automatizada: boolean;
   tipoAutomacao: string;
-  automacaoDiasCarencia: string;
   automacaoDiasAntesVencimento: string;
   automacaoDiasSemCompra: string;
   automacaoDiasPosCompra: string;
@@ -174,7 +239,6 @@ const formInicial: FormCampanha = {
   empresaDestino: "",
   automatizada: false,
   tipoAutomacao: "",
-  automacaoDiasCarencia: "",
   automacaoDiasAntesVencimento: "",
   automacaoDiasSemCompra: "",
   automacaoDiasPosCompra: "",
@@ -275,7 +339,7 @@ function labelRegraAutomacao(form: FormCampanha) {
   if (tipo === "contas_a_vencer_dias") return `Contas em aberto que vencem em ${form.automacaoDiasAntesVencimento || "X"} dias.`;
   if (tipo === "clientes_sem_comprar_dias") return `Clientes sem comprar há ${form.automacaoDiasSemCompra || "X"} dias ou mais.`;
   if (tipo === "pos_compra_dias") return `Clientes cuja última compra ocorreu há ${form.automacaoDiasPosCompra || "X"} dias.`;
-  if (tipo === "contas_vencidas_com_carencia") return `Contas vencidas em aberto dentro de ${form.automacaoDiasCarencia || "X"} dias de carência.`;
+  if (tipo === "contas_vencidas_com_carencia") return "Contas vencidas em aberto dentro da carência definida no Firebird.";
   if (tipo === "contas_vencidas") return "Contas vencidas em aberto após o período de carência.";
   return labelTipoAutomacao(form.tipoAutomacao);
 }
@@ -312,6 +376,12 @@ function formatarDataHora(valor: string | null) {
   const data = new Date(valor);
   if (Number.isNaN(data.getTime())) return "-";
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(data);
+}
+
+function formatarDataFiltroCampanha(valor: string) {
+  if (!valor) return "";
+  const [ano, mes, dia] = valor.split("-");
+  return ano && mes && dia ? `${dia}/${mes}/${ano}` : valor;
 }
 
 function formatarDataInput(valor: string | null) {
@@ -360,22 +430,27 @@ const mensagemEmailInvalido =
 const mensagemCampanhaBloqueada =
   "O cliente selecionado está configurado para não permitir envio de campanhas, favor confirmar com o cliente e altere as configurações.";
 
-function aplicarVariaveisMensagem(mensagem: string, cliente: ClienteCampanha, form: FormCampanha) {
+function aplicarVariaveisMensagem(mensagem: string, cliente: ClienteCampanha, form: FormCampanha, config: ConfigModelosMensagem) {
   const nome = cliente.nome ?? "";
   const dataAtual = new Intl.DateTimeFormat("pt-BR").format(new Date());
   const formatarDataCliente = (value: string | null) => {
     const data = dataValida(value);
     return data ? new Intl.DateTimeFormat("pt-BR").format(data) : "";
   };
-  return mensagem
-    .replace(/\{\{\s*nome\s*\}\}/gi, nome)
-    .replace(/\{\{\s*cliente\s*\}\}/gi, nome)
-    .replace(/\{\{\s*empresa\s*\}\}/gi, form.empresaDestino.trim())
-    .replace(/\{\{\s*aos_cuidados\s*\}\}/gi, form.aosCuidados.trim())
-    .replace(/\{\{\s*data_atual\s*\}\}/gi, dataAtual)
-    .replace(/\{\{\s*documento\s*\}\}/gi, String(cliente.id_cliente ?? ""))
-    .replace(/\{\{\s*ultima_compra\s*\}\}/gi, formatarDataCliente(cliente.dt_ultcomp))
-    .replace(/\{\{\s*primeira_compra\s*\}\}/gi, formatarDataCliente(cliente.dt_pricomp));
+  return aplicarVariaveisModelo(mensagem, {
+    nome,
+    cliente: nome,
+    nome_cliente: nome,
+    cliente_nome: nome,
+    empresa: form.empresaDestino.trim(),
+    nome_empresa: form.empresaDestino.trim(),
+    empresa_nome: form.empresaDestino.trim(),
+    aos_cuidados: form.aosCuidados.trim(),
+    data_atual: dataAtual,
+    documento: String(cliente.id_cliente ?? ""),
+    ultima_compra: formatarDataCliente(cliente.dt_ultcomp),
+    primeira_compra: formatarDataCliente(cliente.dt_pricomp),
+  }, config);
 }
 
 function separarDataHoraAgendamento(valor: string) {
@@ -449,7 +524,6 @@ function contaEmAberto(conta: ContaCampanha) {
 function contaAtendeTipoAutomacao(
   conta: ContaCampanha,
   tipoAutomacao: string,
-  diasCarencia: string,
   diasAntesVencimento: string,
 ) {
   if (!contaEmAberto(conta)) return false;
@@ -469,7 +543,7 @@ function contaAtendeTipoAutomacao(
   }
   if (tipo === "contas_vencendo_hoje") return vencimento.getTime() === hoje.getTime();
   if (tipo === "contas_vencidas_com_carencia") {
-    const carencia = Number(diasCarencia);
+    const carencia = Math.max(0, Number(conta.dias_carencia ?? 0));
     if (!Number.isInteger(carencia) || carencia < 1 || vencimento >= hoje) return false;
     const limite = new Date(vencimento);
     limite.setDate(limite.getDate() + carencia);
@@ -772,6 +846,105 @@ function parseCampanha(data: unknown): Campanha {
   return data as Campanha;
 }
 
+function clampPercentual(valor: number) {
+  if (!Number.isFinite(valor)) return 0;
+  return Math.max(0, Math.min(100, Math.round(valor)));
+}
+
+function inicioDoDia(data = new Date()) {
+  const inicio = new Date(data);
+  inicio.setHours(0, 0, 0, 0);
+  return inicio;
+}
+
+function fimDoDia(data = new Date()) {
+  const fim = inicioDoDia(data);
+  fim.setDate(fim.getDate() + 1);
+  return fim;
+}
+
+function horarioParaData(data: Date, horario: string) {
+  const [hora, minuto] = String(horario).slice(0, 5).split(":").map(Number);
+  if (!Number.isInteger(hora) || !Number.isInteger(minuto)) return null;
+  const resultado = new Date(data);
+  resultado.setHours(hora, minuto, 0, 0);
+  return resultado;
+}
+
+function calcularJanelaProgresso(campanha: Campanha, agora = new Date()) {
+  const inicioCampanha = campanha.data_hora_agendamento ? new Date(campanha.data_hora_agendamento) : new Date(campanha.criado_em);
+  const fimCampanha = campanha.termina_em ? new Date(campanha.termina_em) : null;
+  const horarios = (campanha.automacao_horarios ?? [])
+    .map((item) => String(item).slice(0, 5))
+    .filter((item) => /^([01]\d|2[0-3]):[0-5]\d$/.test(item))
+    .sort();
+
+  if (!campanha.automatizada) {
+    return { inicio: inicioCampanha, fim: fimCampanha, tipo: "total" as const };
+  }
+
+  if (fimCampanha && !campanha.campanha_continua) {
+    return { inicio: inicioCampanha, fim: fimCampanha, tipo: "periodo" as const };
+  }
+
+  const hoje = inicioDoDia(agora);
+  const inicioBase = inicioCampanha > hoje ? inicioCampanha : hoje;
+  if (horarios.length > 0) {
+    const inicioHorario = horarioParaData(hoje, horarios[0]);
+    const fimHorario = horarioParaData(hoje, horarios[horarios.length - 1]);
+    const inicio = inicioHorario && inicioHorario > inicioBase ? inicioHorario : inicioBase;
+    const fim = fimHorario && fimHorario > inicio ? fimHorario : fimDoDia(agora);
+    return { inicio, fim, tipo: "diario" as const };
+  }
+
+  return { inicio: inicioBase, fim: fimDoDia(agora), tipo: "diario" as const };
+}
+
+function percentualTempo(inicio: Date, fim: Date | null, agora = new Date()) {
+  if (!fim || Number.isNaN(inicio.getTime()) || Number.isNaN(fim.getTime()) || fim <= inicio) return 0;
+  if (agora <= inicio) return 0;
+  if (agora >= fim) return 100;
+  return ((agora.getTime() - inicio.getTime()) / (fim.getTime() - inicio.getTime())) * 100;
+}
+
+function itemNoCiclo(item: AutomacaoExecucaoItemCampanha, inicio: Date, fim: Date | null) {
+  const referencia = item.ultima_tentativa_em || item.atualizado_em || item.criado_em;
+  if (!referencia) return false;
+  const data = new Date(referencia);
+  if (Number.isNaN(data.getTime())) return false;
+  return data >= inicio && (!fim || data <= fim);
+}
+
+function calcularProgressoCampanha(campanha: Campanha, itens: AutomacaoExecucaoItemCampanha[] = []) {
+  if (!campanha.automatizada) {
+    const percentual = clampPercentual(Number(campanha.percentual_envio ?? 0));
+    return { percentual, label: campanha.status === "enviando" ? `Enviando ${percentual}%` : `${percentual}%` };
+  }
+
+  if (campanha.status === "concluida" || campanha.status === "cancelada") {
+    return { percentual: 100, label: "100% concluída" };
+  }
+
+  const janela = calcularJanelaProgresso(campanha);
+  const tempo = percentualTempo(janela.inicio, janela.fim);
+  const itensDoCiclo = itens.filter((item) => itemNoCiclo(item, janela.inicio, janela.fim));
+  const enviados = itensDoCiclo.filter((item) => item.status === "enviado").length;
+  const erros = itensDoCiclo.filter((item) => item.status === "erro").length;
+  const pendentes = itensDoCiclo.filter((item) => item.status === "pendente").length;
+  const processados = enviados + erros;
+  const totalTarefas = Math.max(Number(campanha.total_destinatarios ?? 0), itensDoCiclo.length);
+  const tarefas = totalTarefas > 0 ? (processados / totalTarefas) * 100 : 0;
+  const possuiPendencia = pendentes > 0 || (totalTarefas > 0 && processados < totalTarefas);
+  const percentual = possuiPendencia
+    ? clampPercentual(Math.min(95, Math.max(tarefas, tempo * 0.65)))
+    : clampPercentual(Math.max(tarefas, tempo));
+
+  if (possuiPendencia && pendentes > 0) return { percentual, label: `${percentual}% · aguardando tentativas` };
+  if (totalTarefas > 0) return { percentual, label: `${percentual}% · ${processados}/${totalTarefas}` };
+  if (janela.tipo === "diario") return { percentual, label: `${percentual}% do dia` };
+  return { percentual, label: `${percentual}% do período` };
+}
+
 export function CampanhasPromocao() {
   const { usuario } = useAuth();
   const [campanhas, setCampanhas] = useState<Campanha[]>([]);
@@ -779,6 +952,7 @@ export function CampanhasPromocao() {
   const [contas, setContas] = useState<ContaCampanha[]>([]);
   const [destinatariosPorCampanha, setDestinatariosPorCampanha] = useState<Record<string, DestinatarioCampanha[]>>({});
   const [filasPorCampanha, setFilasPorCampanha] = useState<Record<string, number>>({});
+  const [itensAutomacaoPorCampanha, setItensAutomacaoPorCampanha] = useState<Record<string, AutomacaoExecucaoItemCampanha[]>>({});
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -792,10 +966,13 @@ export function CampanhasPromocao() {
   const [selecionados, setSelecionados] = useState<Set<number>>(new Set());
   const [modelosAtivos, setModelosAtivos] = useState<ModeloMensagemAtivo[]>([]);
   const [modelosCobranca, setModelosCobranca] = useState<ModeloMensagem[]>([]);
+  const [configModelos, setConfigModelos] = useState<ConfigModelosMensagem>(CONFIG_MODELOS_PADRAO);
   const [modeloSelecionado, setModeloSelecionado] = useState("");
   const [novoHorarioAutomacao, setNovoHorarioAutomacao] = useState("");
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatusCampanha>("padrao");
   const [filtrosLista, setFiltrosLista] = useState<FiltrosListaCampanhas>(filtrosListaCampanhasIniciais);
+  const [paginaAtual, setPaginaAtual] = useState(1);
+  const [totalRegistros, setTotalRegistros] = useState(0);
 
   const gruposModelosAtivos = useMemo(() => {
     const grupos = new Map<string, ModeloMensagemAtivo[]>();
@@ -823,7 +1000,7 @@ export function CampanhasPromocao() {
       return;
     }
 
-    const [modelosGerais, cobranca] = await Promise.allSettled([
+    const [modelosGerais, cobranca, config] = await Promise.allSettled([
       supabase
         .from("tab_modelos_msg")
         .select("id, modelo_msg_titulo, modelo_msg, modelo_global")
@@ -832,12 +1009,14 @@ export function CampanhasPromocao() {
         .order("modelo_global", { ascending: false })
         .order("modelo_msg_titulo", { ascending: true }),
       buscarModelosMensagem(usuario.id_empresa),
+      buscarConfigModelosMensagem(),
     ]);
 
     if (modelosGerais.status === "fulfilled") {
       setModelosAtivos(modelosGerais.value.error ? [] : ((modelosGerais.value.data ?? []) as ModeloMensagemAtivo[]));
     } else setModelosAtivos([]);
     setModelosCobranca(cobranca.status === "fulfilled" ? cobranca.value : []);
+    setConfigModelos(config.status === "fulfilled" ? config.value : CONFIG_MODELOS_PADRAO);
   }, [usuario?.id_empresa]);
 
   const carregarDados = useCallback(async () => {
@@ -849,16 +1028,32 @@ export function CampanhasPromocao() {
       setClientes([]);
       setContas([]);
       setFilasPorCampanha({});
+      setItensAutomacaoPorCampanha({});
+      setTotalRegistros(0);
       setCarregando(false);
       return;
     }
 
-    const [campanhasResult, clientesResult, contasResult, destinatariosResult, filasResult] = await Promise.all([
-      supabase
-        .from("tab_campanha")
-        .select("*")
-        .eq("id_empresa", usuario.id_empresa)
-        .order("criado_em", { ascending: false }),
+    let campanhasQuery = supabase
+      .from("tab_campanha")
+      .select(CAMPANHAS_SELECT, { count: "exact" })
+      .eq("id_empresa", usuario.id_empresa);
+
+    if (filtroStatus === "padrao") campanhasQuery = campanhasQuery.in("status", statusExibicaoPadrao);
+    else if (filtroStatus !== "todos") campanhasQuery = campanhasQuery.eq("status", filtroStatus);
+    if (filtrosLista.busca.trim()) campanhasQuery = campanhasQuery.ilike("nome", `%${filtrosLista.busca.trim()}%`);
+    if (filtrosLista.tipoComunicacao !== "todos") campanhasQuery = campanhasQuery.eq("tipo_comunicacao", filtrosLista.tipoComunicacao);
+    if (filtrosLista.dataInicial) campanhasQuery = campanhasQuery.gte("criado_em", `${filtrosLista.dataInicial}T00:00:00`);
+    if (filtrosLista.dataFinal) {
+      const fim = new Date(`${filtrosLista.dataFinal}T00:00:00`);
+      fim.setDate(fim.getDate() + 1);
+      campanhasQuery = campanhasQuery.lt("criado_em", fim.toISOString());
+    }
+
+    const [campanhasResult, clientesResult, contasResult, destinatariosResult, filasResult, itensAutomacaoResult] = await Promise.all([
+      campanhasQuery
+        .order("criado_em", { ascending: false })
+        .range((paginaAtual - 1) * ITENS_POR_PAGINA_CAMPANHAS, paginaAtual * ITENS_POR_PAGINA_CAMPANHAS - 1),
       supabase
         .from("tab_cliente")
         .select("id_empresa, id_cliente, nome, dt_nascto, dt_pricomp, dt_ultcomp, ddd_celul, fone_celul, email_cont, permite_campanha, contato_restrito, tags")
@@ -877,15 +1072,22 @@ export function CampanhasPromocao() {
         .select("id_origem, status, enviado, ativo")
         .eq("id_empresa", usuario.id_empresa)
         .eq("origem_modulo", "CAMPANHA"),
+      supabase
+        .from("tab_automacao_execucao_itens")
+        .select("id_campanha, status, ultima_tentativa_em, proxima_tentativa_em, atualizado_em, criado_em")
+        .eq("id_empresa", usuario.id_empresa)
+        .order("atualizado_em", { ascending: false })
+        .limit(5000),
     ]);
 
-    if (campanhasResult.error || clientesResult.error || contasResult.error || destinatariosResult.error || filasResult.error) {
+    if (campanhasResult.error || clientesResult.error || contasResult.error || destinatariosResult.error || filasResult.error || itensAutomacaoResult.error) {
       setErro(
         campanhasResult.error?.message ||
           clientesResult.error?.message ||
           contasResult.error?.message ||
           destinatariosResult.error?.message ||
           filasResult.error?.message ||
+          itensAutomacaoResult.error?.message ||
           "Não foi possível carregar campanhas.",
       );
       setCampanhas([]);
@@ -893,11 +1095,14 @@ export function CampanhasPromocao() {
       setContas([]);
       setDestinatariosPorCampanha({});
       setFilasPorCampanha({});
+      setItensAutomacaoPorCampanha({});
+      setTotalRegistros(0);
       setCarregando(false);
       return;
     }
 
     setCampanhas((campanhasResult.data ?? []).map(parseCampanha));
+    setTotalRegistros(campanhasResult.count ?? campanhasResult.data?.length ?? 0);
     setClientes((clientesResult.data ?? []) as ClienteCampanha[]);
     setContas((contasResult.data ?? []) as ContaCampanha[]);
     setDestinatariosPorCampanha(
@@ -917,12 +1122,23 @@ export function CampanhasPromocao() {
         return acc;
       }, {} as Record<string, number>),
     );
+    setItensAutomacaoPorCampanha(
+      ((itensAutomacaoResult.data ?? []) as AutomacaoExecucaoItemCampanha[]).reduce((acc, item) => {
+        if (!item.id_campanha) return acc;
+        acc[item.id_campanha] = [...(acc[item.id_campanha] ?? []), item];
+        return acc;
+      }, {} as Record<string, AutomacaoExecucaoItemCampanha[]>),
+    );
     setCarregando(false);
-  }, [usuario?.id_empresa]);
+  }, [filtroStatus, filtrosLista, paginaAtual, usuario?.id_empresa]);
 
   useEffect(() => {
     void carregarDados();
   }, [carregarDados]);
+
+  useEffect(() => {
+    setPaginaAtual(1);
+  }, [filtroStatus, filtrosLista]);
 
   useEffect(() => {
     void carregarModelosAtivos();
@@ -982,6 +1198,25 @@ export function CampanhasPromocao() {
       return true;
     });
   }, [campanhas, filtroStatus, filtrosLista]);
+  const totalPaginas = Math.max(1, Math.ceil(totalRegistros / ITENS_POR_PAGINA_CAMPANHAS));
+  const filtrosAtivosCampanhas = [
+    filtroStatus === "padrao"
+      ? "Status: Padrão"
+      : filtroStatus !== "todos"
+        ? `Status: ${cards.find((card) => card.filtro === filtroStatus)?.label ?? filtroStatus}`
+        : null,
+    filtrosLista.busca.trim() ? `Busca: ${filtrosLista.busca.trim()}` : null,
+    filtrosLista.dataInicial ? `Data inicial: ${formatarDataFiltroCampanha(filtrosLista.dataInicial)}` : null,
+    filtrosLista.dataFinal ? `Data final: ${formatarDataFiltroCampanha(filtrosLista.dataFinal)}` : null,
+    filtrosLista.tipoComunicacao !== "todos"
+      ? `Tipo: ${filtrosLista.tipoComunicacao === "whatsapp" ? "WhatsApp" : filtrosLista.tipoComunicacao === "email" ? "E-mail" : "Instagram"}`
+      : null,
+  ].filter((filtro): filtro is string => Boolean(filtro));
+
+  function limparFiltrosCampanhas() {
+    setFiltroStatus("todos");
+    setFiltrosLista({ busca: "", dataInicial: "", dataFinal: "", tipoComunicacao: "todos" });
+  }
 
   const clientesFiltrados = useMemo(() => filtrarClientes(clientes, form), [clientes, form]);
   const clientesSelecionados = useMemo(
@@ -994,8 +1229,8 @@ export function CampanhasPromocao() {
   const clientesExibidos = clientesFiltrados;
   const ignoradosFiltrados = Math.max(0, clientesFiltrados.length - clientesAptosFiltrados.length);
   const contasFiltradas = useMemo(
-    () => contas.filter((conta) => contaAtendeTipoAutomacao(conta, form.tipoAutomacao, form.automacaoDiasCarencia, form.automacaoDiasAntesVencimento)),
-    [contas, form.automacaoDiasAntesVencimento, form.automacaoDiasCarencia, form.tipoAutomacao],
+    () => contas.filter((conta) => contaAtendeTipoAutomacao(conta, form.tipoAutomacao, form.automacaoDiasAntesVencimento)),
+    [contas, form.automacaoDiasAntesVencimento, form.tipoAutomacao],
   );
   const contasAptas = contasFiltradas.filter((conta) => motivoBloqueioConta(conta, clientes) === null);
   const contasIgnoradas = Math.max(0, contasFiltradas.length - contasAptas.length);
@@ -1029,7 +1264,6 @@ export function CampanhasPromocao() {
       empresaDestino: campanha.empresa_destino ?? "",
       automatizada: campanha.automatizada,
       tipoAutomacao: normalizarTipoAutomacao(campanha.tipo_automacao),
-      automacaoDiasCarencia: campanha.automacao_dias_carencia === null ? "" : String(campanha.automacao_dias_carencia),
       automacaoDiasAntesVencimento: campanha.automacao_dias_antes_vencimento === null ? "" : String(campanha.automacao_dias_antes_vencimento),
       automacaoDiasSemCompra: campanha.automacao_dias_sem_compra === null ? "" : String(campanha.automacao_dias_sem_compra),
       automacaoDiasPosCompra: campanha.automacao_dias_pos_compra === null ? "" : String(campanha.automacao_dias_pos_compra),
@@ -1074,7 +1308,6 @@ export function CampanhasPromocao() {
       empresaDestino: campanha.empresa_destino ?? "",
       automatizada: campanha.automatizada,
       tipoAutomacao: normalizarTipoAutomacao(campanha.tipo_automacao),
-      automacaoDiasCarencia: campanha.automacao_dias_carencia === null ? "" : String(campanha.automacao_dias_carencia),
       automacaoDiasAntesVencimento: campanha.automacao_dias_antes_vencimento === null ? "" : String(campanha.automacao_dias_antes_vencimento),
       automacaoDiasSemCompra: campanha.automacao_dias_sem_compra === null ? "" : String(campanha.automacao_dias_sem_compra),
       automacaoDiasPosCompra: campanha.automacao_dias_pos_compra === null ? "" : String(campanha.automacao_dias_pos_compra),
@@ -1159,13 +1392,6 @@ export function CampanhasPromocao() {
         setErro("Informe o tipo de automação.");
         return;
       }
-      if (normalizarTipoAutomacao(form.tipoAutomacao) === "contas_vencidas_com_carencia") {
-        const dias = Number(form.automacaoDiasCarencia);
-        if (!Number.isInteger(dias) || dias < 1) {
-          setErro("Informe os dias de carência com um número inteiro maior ou igual a 1.");
-          return;
-        }
-      }
       if (normalizarTipoAutomacao(form.tipoAutomacao) === "contas_a_vencer_dias") {
         const dias = Number(form.automacaoDiasAntesVencimento);
         if (!Number.isInteger(dias) || dias < 1) {
@@ -1198,7 +1424,7 @@ export function CampanhasPromocao() {
       };
       const cobranca = isAutomacaoCobranca(form.tipoAutomacao);
       const candidatos = cobranca
-        ? contas.filter((conta) => contaAtendeTipoAutomacao(conta, form.tipoAutomacao, form.automacaoDiasCarencia, form.automacaoDiasAntesVencimento))
+        ? contas.filter((conta) => contaAtendeTipoAutomacao(conta, form.tipoAutomacao, form.automacaoDiasAntesVencimento))
         : filtrarClientes(clientes, formPublico);
       const aptos = cobranca
         ? (candidatos as ContaCampanha[]).filter((conta) => motivoBloqueioConta(conta, clientes) === null)
@@ -1283,10 +1509,6 @@ export function CampanhasPromocao() {
     if (form.automatizada && !tiposAutomacao.some((item) => item.value === normalizarTipoAutomacao(form.tipoAutomacao))) {
       return "Informe o tipo de automação.";
     }
-    if (form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_vencidas_com_carencia") {
-      const dias = Number(form.automacaoDiasCarencia);
-      if (!Number.isInteger(dias) || dias < 1) return "Informe os dias de carência com um número inteiro maior ou igual a 1.";
-    }
     if (form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_a_vencer_dias") {
       const dias = Number(form.automacaoDiasAntesVencimento);
       if (!Number.isInteger(dias) || dias < 1) return "Informe os dias antes do vencimento com um número inteiro maior ou igual a 1.";
@@ -1365,10 +1587,6 @@ export function CampanhasPromocao() {
       automatizada: form.automatizada,
       publico_dinamico: form.automatizada,
       tipo_automacao: form.automatizada ? normalizarTipoAutomacao(form.tipoAutomacao) : null,
-      automacao_dias_carencia:
-        form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_vencidas_com_carencia"
-          ? Number(form.automacaoDiasCarencia)
-          : null,
       automacao_dias_antes_vencimento:
         form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_a_vencer_dias"
           ? Number(form.automacaoDiasAntesVencimento)
@@ -1508,7 +1726,7 @@ export function CampanhasPromocao() {
             descricao: campanhaSalva.objetivo,
             destinatario_nome: cliente.nome,
             destinatario_telefone: telefone,
-            mensagem: aplicarVariaveisMensagem(form.mensagem.trim(), cliente, form),
+            mensagem: aplicarVariaveisMensagem(form.mensagem.trim(), cliente, form, configModelos),
             tipo_agendamento: "UNICO",
             data_envio: dataEnvio,
             hora_envio: horaEnvio,
@@ -1633,6 +1851,20 @@ export function CampanhasPromocao() {
             </select>
           </label>
         </div>
+
+        {filtrosAtivosCampanhas.length > 0 && (
+          <div className="active-filters-bar">
+            <div className="active-filters-info">
+              <span className="active-filters-label">Filtro ativo:</span>
+              {filtrosAtivosCampanhas.map((filtro) => (
+                <span className="active-filter-chip" key={filtro}>{filtro}</span>
+              ))}
+            </div>
+            <button className="active-filters-clear" type="button" onClick={limparFiltrosCampanhas}>
+              Limpar filtros
+            </button>
+          </div>
+        )}
       </section>
 
       {feedback && <div className="feedback-box feedback-success">{feedback}</div>}
@@ -1641,7 +1873,26 @@ export function CampanhasPromocao() {
       <section className="results-section">
         <div className="section-title">
           <h2>Campanhas cadastradas</h2>
-          <span>{campanhasExibidas.length} campanha(s)</span>
+          <span>{totalRegistros} campanha(s)</span>
+          <div className="table-pagination">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={carregando || paginaAtual <= 1}
+              onClick={() => setPaginaAtual((pagina) => Math.max(1, pagina - 1))}
+            >
+              Anterior
+            </button>
+            <span>Página {paginaAtual} de {totalPaginas}</span>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={carregando || paginaAtual >= totalPaginas}
+              onClick={() => setPaginaAtual((pagina) => Math.min(totalPaginas, pagina + 1))}
+            >
+              Próxima
+            </button>
+          </div>
         </div>
 
         {carregando && <div className="state-box">Carregando campanhas...</div>}
@@ -1666,7 +1917,9 @@ export function CampanhasPromocao() {
                 </tr>
               </thead>
               <tbody>
-                {campanhasExibidas.map((campanha) => (
+                {campanhasExibidas.map((campanha) => {
+                  const progresso = calcularProgressoCampanha(campanha, itensAutomacaoPorCampanha[campanha.id] ?? []);
+                  return (
                   <tr
                     className={`campaign-row-card campaign-row-card-${campanha.status}`}
                     key={campanha.id}
@@ -1680,7 +1933,7 @@ export function CampanhasPromocao() {
                       <strong>{campanha.nome}</strong>
                       <small>{campanha.automatizada ? "Automatizada" : "Manual/programada"}</small>
                     </td>
-                    <td>{campanha.objetivo || "-"}</td>
+                    <td><span className="campaign-objective-text">{campanha.objetivo || "-"}</span></td>
                     <td>{tipoLabel(campanha.tipo_comunicacao)}</td>
                     <td>
                       <span className={statusClass(campanha.status)}>{statusLabels[campanha.status]}</span>
@@ -1690,8 +1943,8 @@ export function CampanhasPromocao() {
                     </td>
                     <td>
                       <div className="campaign-progress">
-                        <span>{campanha.status === "enviando" ? `Enviando ${campanha.percentual_envio}%` : `${campanha.percentual_envio}%`}</span>
-                        <div><span style={{ width: `${campanha.percentual_envio}%` }} /></div>
+                        <span>{progresso.label}</span>
+                        <div><span style={{ width: `${progresso.percentual}%` }} /></div>
                       </div>
                     </td>
                     <td>{formatarDataHora(campanha.data_hora_agendamento)}</td>
@@ -1734,7 +1987,8 @@ export function CampanhasPromocao() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1851,7 +2105,6 @@ export function CampanhasPromocao() {
                           automatizada,
                           tipoComunicacao: automatizada ? "whatsapp" : form.tipoComunicacao,
                           tipoAutomacao: automatizada ? form.tipoAutomacao : "",
-                          automacaoDiasCarencia: automatizada ? form.automacaoDiasCarencia : "",
                           automacaoDiasAntesVencimento: automatizada ? form.automacaoDiasAntesVencimento : "",
                           automacaoDiasSemCompra: automatizada ? form.automacaoDiasSemCompra : "",
                           automacaoDiasPosCompra: automatizada ? form.automacaoDiasPosCompra : "",
@@ -1879,7 +2132,6 @@ export function CampanhasPromocao() {
                         onChange={(event) => setForm({
                           ...form,
                           tipoAutomacao: event.target.value,
-                          automacaoDiasCarencia: event.target.value === "contas_vencidas_com_carencia" ? form.automacaoDiasCarencia : "",
                           automacaoDiasAntesVencimento: event.target.value === "contas_a_vencer_dias" ? form.automacaoDiasAntesVencimento : "",
                           automacaoDiasSemCompra: event.target.value === "clientes_sem_comprar_dias" ? form.automacaoDiasSemCompra : "",
                           automacaoDiasPosCompra: event.target.value === "pos_compra_dias" ? form.automacaoDiasPosCompra : "",
@@ -1888,24 +2140,6 @@ export function CampanhasPromocao() {
                         <option value="">Selecione</option>
                         {tiposAutomacao.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
                       </select>
-                    </label>
-                  )}
-                  {form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_vencidas_com_carencia" && (
-                    <label className="campaign-grace-field">
-                      <span>Dias de carência</span>
-                      <div>
-                        <input
-                          type="number"
-                          min="1"
-                          max="9999"
-                          step="1"
-                          value={form.automacaoDiasCarencia}
-                          onChange={(event) => setForm({ ...form, automacaoDiasCarencia: event.target.value.slice(0, 4) })}
-                          placeholder="Ex: 3"
-                          disabled={salvando}
-                        />
-                        <small>Informe por quantos dias após o vencimento a conta ficará em período de carência.</small>
-                      </div>
                     </label>
                   )}
                   {form.automatizada && normalizarTipoAutomacao(form.tipoAutomacao) === "contas_a_vencer_dias" && (
@@ -2397,7 +2631,7 @@ export function CampanhasPromocao() {
                 <div><dt>Objetivo</dt><dd>{detalhes.objetivo ?? "-"}</dd></div>
                 <div><dt>Público</dt><dd>{detalhes.publico_alvo ?? "-"}</dd></div>
                 <div><dt>Agendamento</dt><dd>{formatarDataHora(detalhes.data_hora_agendamento)}</dd></div>
-                <div><dt>Progresso</dt><dd>{detalhes.percentual_envio}%</dd></div>
+                <div><dt>Progresso</dt><dd>{calcularProgressoCampanha(detalhes, itensAutomacaoPorCampanha[detalhes.id] ?? []).label}</dd></div>
                 <div><dt>Destinatários</dt><dd>{detalhes.total_destinatarios}</dd></div>
                 <div><dt>Intervalo</dt><dd>{detalhes.intervalo_envio_segundos}s</dd></div>
               </dl>

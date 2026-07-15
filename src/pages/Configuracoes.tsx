@@ -11,6 +11,8 @@ interface BtzapInstanceData {
   paircode?: string | null;
   profileName?: string | null;
   profilePicUrl?: string | null;
+  phoneNumber?: string | null;
+  rawPhoneNumber?: string | null;
   lastStatusAt?: string | null;
   lastQrCodeAt?: string | null;
   lastDisconnect?: unknown;
@@ -33,6 +35,8 @@ interface BtzapConfigData {
   ultimo_profile_pic_url: string | null;
   ultimo_connected: boolean | null;
   ultimo_logged_in: boolean | null;
+  ultimo_phone_number?: string | null;
+  ultimo_raw_phone_number?: string | null;
   ultimo_qrcode_em: string | null;
 }
 
@@ -111,8 +115,8 @@ function ParametrosWhatsForm({ empresaId }: { empresaId: string }) {
   const Field = ({ label, campo, min = 0, nulo = true }: { label: string; campo: keyof ParametroWhats; min?: number; nulo?: boolean }) => <label className="parameter-field"><span>{label}</span><input type="number" min={min} value={(atual[campo] as number | null) ?? ""} onChange={numero(campo, nulo)} /></label>;
   return <article className="settings-card settings-whatsapp-parameters">
     <header className="settings-parameter-header">
-      <div><h2>Parâmetros gerais de envio WhatsApp</h2><p>Essas regras serão aplicadas a todos os envios antes do envio ao BTZap.</p></div>
-      <span className="settings-protection-badge">Proteção ativa antes do BTZap</span>
+      <div><h2>Parâmetros gerais de envio WhatsApp</h2><p>Quando ativo, essas regras serão aplicadas a todos os envios antes do envio ao BTZap.</p></div>
+      <span className="settings-protection-badge">{atual.ativo ? "Proteção ativa antes do BTZap" : "Envio direto sem filtros"}</span>
     </header>
     <div className="settings-parameter-summary-grid">
       {[['Intervalo', `${atual.intervalo_min_segundos}–${atual.intervalo_max_segundos}s`, 'Tempo aleatório entre mensagens'], ['Limite/min', `${atual.max_mensagens_por_minuto}/min`, 'Máximo por minuto'], ['Limite diário', `${atual.usar_limite_estavel ? atual.max_mensagens_por_dia_estavel : atual.max_mensagens_por_dia_inicial}/dia`, 'Controle diário de envios'], ['Por categoria', `${atual.max_mensagens_cliente_categoria_dia}/dia`, 'Por cliente e tipo'], ['Horário', horarioResumo, 'Janela permitida'], ['Feriados', atual.enviar_feriado ? 'Permitido' : 'Bloqueado', 'Envio em feriados']].map(([titulo,valor,descricao]) => <div className="settings-parameter-summary-card" key={titulo}><span>{titulo}</span><strong>{valor}</strong><small>{descricao}</small></div>)}
@@ -121,7 +125,7 @@ function ParametrosWhatsForm({ empresaId }: { empresaId: string }) {
     <div className="settings-parameter-sections">
       <section className="settings-parameter-section parameter-status-section">
         <div className="parameter-section-heading"><h3>Status do parâmetro geral</h3><p>Defina se a proteção geral está ativa para os envios WhatsApp.</p></div>
-        <label className="parameter-switch"><input type="checkbox" checked={atual.ativo} onChange={(e) => alterar("ativo", e.target.checked)} /><span className="parameter-switch-track" /><span><strong>Parâmetro {atual.ativo ? "ativo" : "inativo"}</strong><small>{atual.ativo ? "Esta configuração será usada em todos os envios." : "Os envios serão bloqueados até a proteção geral ser ativada."}</small></span></label>
+        <label className="parameter-switch"><input type="checkbox" checked={atual.ativo} onChange={(e) => alterar("ativo", e.target.checked)} /><span className="parameter-switch-track" /><span><strong>Parâmetro {atual.ativo ? "ativo" : "inativo"}</strong><small>{atual.ativo ? "Esta configuração será usada em todos os envios." : "Os envios ignorarão horários, limites, intervalos e dias permitidos."}</small></span></label>
       </section>
 
       <section className="settings-parameter-section">
@@ -241,7 +245,9 @@ function existeStatusSalvo(config: BtzapConfigData | null) {
       config?.ultimo_connected === false ||
       config?.ultimo_logged_in === false ||
       config?.ultimo_profile_name ||
-      config?.ultimo_profile_pic_url
+      config?.ultimo_profile_pic_url ||
+      config?.ultimo_phone_number ||
+      config?.ultimo_raw_phone_number
   );
 }
 
@@ -262,6 +268,8 @@ function montarStatusSalvoWhatsapp(config: BtzapConfigData | null): BtzapInstanc
     status: config.ultimo_status_instancia || (conectado ? "connected" : "disconnected"),
     profileName: config.ultimo_profile_name || "-",
     profilePicUrl: config.ultimo_profile_pic_url || null,
+    phoneNumber: config.ultimo_phone_number || null,
+    rawPhoneNumber: config.ultimo_raw_phone_number || null,
     lastStatusAt: config.ultimo_status_em || null,
     lastQrCodeAt: config.ultimo_qrcode_em || null,
     qrcode: null,
@@ -537,6 +545,12 @@ export function Configuracoes() {
     }
 
     return "Status ainda não consultado";
+  }
+
+  function getNumeroTelefoneConectadoLabel(data: BtzapInstanceData | null) {
+    if (carregandoConfiguracoes && !data) return "Carregando...";
+    if (!data || !isInstanciaConectada(data)) return "N\u00e3o conectado";
+    return data.phoneNumber || "N\u00e3o informado";
   }
 
   function atualizarDadosInstancia(data: BtzapInstanceData, mensagemPadrao?: string) {
@@ -889,6 +903,11 @@ export function Configuracoes() {
                       )}
                     </div>
 
+                    <div>
+                      <dt>{"N\u00famero Telefone Conectado"}</dt>
+                      <dd>{getNumeroTelefoneConectadoLabel(dadosInstancia)}</dd>
+                    </div>
+
                     {dadosInstancia ? (
                       <>
                         <div>
@@ -911,10 +930,6 @@ export function Configuracoes() {
                           <dd>{formatarDataHora(dadosInstancia.lastStatusAt)}</dd>
                         </div>
 
-                        <div>
-                          <dt>Código de pareamento</dt>
-                          <dd>{dadosInstancia.paircode || "-"}</dd>
-                        </div>
                       </>
                     ) : (
                       <div>

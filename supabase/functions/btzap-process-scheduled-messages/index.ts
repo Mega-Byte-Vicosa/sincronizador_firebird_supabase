@@ -5,6 +5,7 @@ import { extrairDadosInstancia, montarEndpoint } from "../_shared/btzapInstance.
 import { extrairMensagemIdExterno } from "../_shared/btzapMessageStatus.ts";
 import { createSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { processarCampanhasAutomatizadas } from "../_shared/campaignAutomations.ts";
+import { calcularSegundaTentativaBloqueio } from "../_shared/scheduledParameterBlocks.ts";
 import { mensagemRetornoEnvio, motivoPendenteEnvio, normalizarTipoEnvio, processarEnvioWhatsApp } from "../_shared/whatsappSendGuard.ts";
 
 const LIMITE_POR_EXECUCAO = 10;
@@ -24,6 +25,11 @@ interface MensagemProgramada {
   enviado: boolean;
   ativo: boolean;
   tentativas_envio: number;
+  tentativa_atual?: number | null;
+  executar_primeira_tentativa_em?: string | null;
+  executar_segunda_tentativa_em?: string | null;
+  gerada_por_bloqueio_parametros?: boolean | null;
+  motivo_pendencia?: string | null;
   tipo_envio?: string | null;
   modelo_id?: string | null;
 }
@@ -91,6 +97,40 @@ function mensagemBloqueioEnvio(motivo: unknown, detalhe?: unknown) {
     erro_btzap: "Limite mÃ¡ximo de tentativas de reenvio atingido. A mensagem nÃ£o serÃ¡ reenviada automaticamente.",
   };
   return mensagens[String(motivo)] || detalheTexto || String(motivo || "Envio nÃ£o realizado.");
+}
+
+function motivoFinalAmigavel(motivo: unknown, detalhe?: unknown) {
+  const codigo = String(motivo ?? "").trim();
+  const detalheTexto = normalizarTextoErro(detalhe);
+  const motivos: Record<string, string> = {
+    bloqueado_limite_diario: "limite diário atingido",
+    bloqueado_limite_minuto: "limite por minuto atingido",
+    bloqueado_limite_categoria_cliente_dia: "cliente atingiu o limite diário desta categoria",
+    bloqueado_fora_horario: "fora do horário permitido",
+    aguardando_horario_permitido: "fora do horário permitido",
+    bloqueado_dia_nao_permitido: "dia da semana não permitido",
+    bloqueado_feriado: "envio bloqueado em feriado",
+    bloqueado_frequencia_cliente: "frequência mínima do cliente não atingida",
+    aguardando_intervalo: "intervalo de segurança entre mensagens não atingido",
+    falha_sem_parametro_whats: "parâmetros de WhatsApp não configurados",
+    erro_btzap: "erro técnico no BTZap",
+    timeout: "tempo limite excedido",
+    erro_conexao: "erro de conexão",
+    erro_internet: "erro de conexão",
+  };
+
+  return motivos[codigo] || detalheTexto || codigo || "motivo não informado";
+}
+
+function montarMensagemErroFinal(motivo: unknown, detalhe?: unknown) {
+  const codigo = String(motivo ?? "").trim();
+  const detalheTexto = normalizarTextoErro(detalhe);
+
+  if (codigo === "erro_btzap" && detalheTexto) {
+    return `Não foi possível enviar após 2 tentativas. Último erro: ${detalheTexto}.`;
+  }
+
+  return `Não foi possível enviar após 2 tentativas. Último motivo: ${motivoFinalAmigavel(motivo, detalhe)}.`;
 }
 
 async function buscarContaReceberOrigem(
@@ -264,10 +304,14 @@ async function registrarHistoricoMensagemProgramada(
     documento: contaOrigem.documento,
     mensagem: mensagem.mensagem || null,
     status,
-    tipo_envio: "envio",
+    tipo_envio: normalizarTipoEnvio(
+      mensagem.tipo_envio || (mensagem.origem_modulo === "CONTA_RECEBER" ? "cobranca" : mensagem.origem_modulo === "CAMPANHA" ? "campanha_promocao" : "mensagem_programada"),
+    ),
     provider: "btzap",
     erro: sucesso ? null : erro,
     enviado_em: sucesso ? agora : null,
+    ultima_tentativa_em: agora,
+    proxima_tentativa_em: null,
     mensagem_id_externo: extrairMensagemIdExterno(responsePayload),
     status_entrega: sucesso ? "ENVIADO_API" : "FALHOU",
     enviado_api_em: sucesso ? agora : null,
@@ -323,10 +367,20 @@ async function atualizarMensagemComErro(
   supabase: ReturnType<typeof createSupabaseAdmin>,
   mensagem: MensagemProgramada,
   erro: string,
+  motivo?: string | null,
 ) {
   const { error } = await supabase
     .from("tb_msg_programadas")
-    .update({ status: "ERRO", enviado: false, erro_envio: erro, processando_em: null })
+    .update({
+      status: "ERRO",
+      enviado: false,
+      erro_envio: erro,
+      motivo_bloqueio: motivo ?? "erro_btzap",
+      motivo_pendencia: motivo ?? null,
+      tentativa_atual: 2,
+      proxima_tentativa_em: null,
+      processando_em: null,
+    })
     .eq("id_empresa", mensagem.id_empresa)
     .eq("id_msg_programada", mensagem.id_msg_programada);
 
@@ -479,6 +533,7 @@ async function buscarMensagensAgendadasParaEnvio(supabase: ReturnType<typeof cre
     .eq("ativo", true)
     .eq("enviado", false)
     .lte("executar_em", new Date().toISOString())
+    .lt("tentativa_atual", 2)
     .order("executar_em", { ascending: true })
     .limit(LIMITE_POR_EXECUCAO);
 
@@ -648,15 +703,71 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
       });
       if (!envioProtegido.enviado) {
         const pendentePorRegra = motivoPendenteEnvio(envioProtegido.motivo);
-        const proxima = envioProtegido.proximaTentativaEm || new Date(Date.now() + 60_000).toISOString();
+        const tentativaAtual = Number(mensagem.tentativa_atual ?? 0);
         const erroEnvio = mensagemBloqueioEnvio(envioProtegido.motivo, envioProtegido.detalhe);
+        const falhaFinal = tentativaAtual >= 1;
+
+        if (falhaFinal) {
+          const erroFinal = montarMensagemErroFinal(envioProtegido.motivo, envioProtegido.detalhe ?? erroEnvio);
+          const agora = new Date().toISOString();
+          const { error: erroFinalUpdate } = await supabase.from("tb_msg_programadas").update({
+            status: "ERRO",
+            enviado: false,
+            erro_envio: erroFinal,
+            motivo_bloqueio: envioProtegido.motivo,
+            motivo_pendencia: envioProtegido.motivo,
+            proxima_tentativa_em: null,
+            tentativa_atual: 2,
+            processando_em: null,
+          }).eq("id_empresa", mensagem.id_empresa).eq("id_msg_programada", mensagem.id_msg_programada);
+          if (erroFinalUpdate) throw erroFinalUpdate;
+
+          if (envioProtegido.historicoId) {
+            const { error: historicoErroFinal } = await supabase.from("tab_whatsapp_envios").update({
+              documento: contaOrigem.documento,
+              id_ctarec: contaOrigem.id_ctarec,
+              erro: erroFinal,
+              status: "erro",
+              ultima_tentativa_em: agora,
+              proxima_tentativa_em: null,
+              status_entrega: "FALHOU",
+              falhou_em: agora,
+              origem_envio: "MENSAGEM_PROGRAMADA",
+              origem_modulo: mensagem.origem_modulo,
+              id_msg_programada: mensagem.id_msg_programada,
+              id_origem: mensagem.id_origem ? String(mensagem.id_origem) : null,
+              modelo_id: mensagem.modelo_id ?? null,
+            }).eq("id", envioProtegido.historicoId);
+            if (historicoErroFinal) throw historicoErroFinal;
+          }
+
+          await atualizarStatusWhatsappContaReceber(supabase, mensagem, "erro", erroFinal, envioProtegido.historicoId);
+          await atualizarClienteCampanha(supabase, mensagem, "falhou", erroFinal);
+          await recalcularCampanha(supabase, mensagem);
+          resultados.push({ id_msg_programada: mensagem.id_msg_programada, success: false, status: "erro", bloqueado: true, motivo: envioProtegido.motivo, retorno: erroFinal });
+          continue;
+        }
+
+        const permiteNovaTentativaTecnica = !pendentePorRegra && tentativaAtual <= 0;
+        const segundaTentativa = tentativaAtual <= 0
+          ? calcularSegundaTentativaBloqueio(envioProtegido.parametro, new Date())
+          : null;
+        const proxima = pendentePorRegra
+          ? segundaTentativa ?? envioProtegido.proximaTentativaEm ?? mensagem.executar_em
+          : permiteNovaTentativaTecnica
+            ? segundaTentativa
+            : mensagem.executar_em;
+        const statusProgramada = pendentePorRegra || permiteNovaTentativaTecnica ? "PENDENTE" : "ERRO";
         const { error: reagendarError } = await supabase.from("tb_msg_programadas").update({
-          status: pendentePorRegra ? "PENDENTE" : "ERRO",
+          status: statusProgramada,
           enviado: false,
           erro_envio: erroEnvio,
           motivo_bloqueio: envioProtegido.motivo,
+          motivo_pendencia: pendentePorRegra ? envioProtegido.motivo : null,
           proxima_tentativa_em: proxima,
-          executar_em: pendentePorRegra ? proxima : mensagem.executar_em,
+          executar_em: proxima,
+          executar_segunda_tentativa_em: segundaTentativa ?? mensagem.executar_segunda_tentativa_em ?? null,
+          tentativa_atual: Math.min(tentativaAtual + 1, 2),
           processando_em: null,
         }).eq("id_empresa", mensagem.id_empresa).eq("id_msg_programada", mensagem.id_msg_programada);
         if (reagendarError) throw reagendarError;
@@ -666,6 +777,8 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
             id_ctarec: contaOrigem.id_ctarec,
             erro: erroEnvio,
             status: pendentePorRegra ? "pendente" : "erro",
+            ultima_tentativa_em: new Date().toISOString(),
+            proxima_tentativa_em: pendentePorRegra ? proxima : null,
             status_entrega: pendentePorRegra ? null : "FALHOU",
             falhou_em: pendentePorRegra ? null : new Date().toISOString(),
             origem_envio: "MENSAGEM_PROGRAMADA",
@@ -679,11 +792,11 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
         await atualizarStatusWhatsappContaReceber(
           supabase,
           mensagem,
-          pendentePorRegra ? "pendente" : "erro",
+          pendentePorRegra ? "pendente" : statusProgramada === "PENDENTE" ? "pendente" : "erro",
           pendentePorRegra ? String(envioProtegido.motivo || erroEnvio) : erroEnvio,
           envioProtegido.historicoId,
         );
-        resultados.push({ id_msg_programada: mensagem.id_msg_programada, success: pendentePorRegra, status: pendentePorRegra ? "pendente" : "erro", bloqueado: true, motivo: envioProtegido.motivo, retorno: erroEnvio, proxima_tentativa_em: proxima });
+        resultados.push({ id_msg_programada: mensagem.id_msg_programada, success: pendentePorRegra, status: statusProgramada.toLowerCase(), bloqueado: true, motivo: envioProtegido.motivo, retorno: erroEnvio, proxima_tentativa_em: proxima });
         continue;
       }
       responsePayload = envioProtegido.retornoBtzap;
@@ -712,12 +825,47 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
       resultados.push({ id_msg_programada: mensagem.id_msg_programada, success: true, erro_historico: erroHistorico });
     } catch (error) {
       const errorMessage = normalizarTextoErro(error);
+      let erroHistoricoRegistro = errorMessage;
       console.error(`[Mensagens Programadas] Erro no envio: ${errorMessage}`);
 
       try {
-        await atualizarMensagemComErro(supabase, mensagem, errorMessage);
-        await atualizarStatusWhatsappContaReceber(supabase, mensagem, "erro", errorMessage);
-        console.log("[Mensagens Programadas] Status atualizado para ERRO.");
+        const tentativaAtual = Number(mensagem.tentativa_atual ?? 0);
+        if (tentativaAtual <= 0) {
+          const segundaTentativa = calcularSegundaTentativaBloqueio(null, new Date());
+          const partes = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "America/Sao_Paulo",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hourCycle: "h23",
+          }).formatToParts(new Date(segundaTentativa));
+          const get = (type: string) => partes.find((p) => p.type === type)?.value ?? "";
+          const { error: updateError } = await supabase.from("tb_msg_programadas").update({
+            status: "PENDENTE",
+            enviado: false,
+            erro_envio: errorMessage,
+            motivo_bloqueio: "erro_btzap",
+            motivo_pendencia: null,
+            executar_segunda_tentativa_em: segundaTentativa,
+            proxima_tentativa_em: segundaTentativa,
+            executar_em: segundaTentativa,
+            data_envio: `${get("year")}-${get("month")}-${get("day")}`,
+            hora_envio: `${get("hour")}:${get("minute")}:${get("second")}`,
+            tentativa_atual: 1,
+            processando_em: null,
+          }).eq("id_empresa", mensagem.id_empresa).eq("id_msg_programada", mensagem.id_msg_programada);
+          if (updateError) throw updateError;
+          await atualizarStatusWhatsappContaReceber(supabase, mensagem, "pendente", errorMessage);
+          console.log("[Mensagens Programadas] Erro tecnico registrado; segunda tentativa agendada.");
+        } else {
+          erroHistoricoRegistro = montarMensagemErroFinal("erro_btzap", errorMessage);
+          await atualizarMensagemComErro(supabase, mensagem, erroHistoricoRegistro, "erro_btzap");
+          await atualizarStatusWhatsappContaReceber(supabase, mensagem, "erro", erroHistoricoRegistro);
+          console.log("[Mensagens Programadas] Status atualizado para ERRO.");
+        }
       } catch (updateError) {
         const detail = updateError instanceof Error ? updateError.message : String(updateError);
         console.error(`[Mensagens Programadas] Falha ao atualizar status para ERRO: ${detail}`);
@@ -732,22 +880,22 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
             message: conteudoParaEnvio,
           };
         }
-        await registrarHistoricoMensagemProgramada(supabase, mensagem, "erro", errorMessage, requestPayload, responsePayload);
+        await registrarHistoricoMensagemProgramada(supabase, mensagem, "erro", erroHistoricoRegistro, requestPayload, responsePayload);
       } catch (historyError) {
         const erroHistorico = normalizarTextoErro(historyError);
-        const erroComHistorico = `${errorMessage} | Falha ao registrar histórico: ${erroHistorico}`;
+        const erroComHistorico = `${erroHistoricoRegistro} | Falha ao registrar histórico: ${erroHistorico}`;
         await atualizarErroMensagemProgramada(supabase, mensagem, erroComHistorico);
         console.error(`[Mensagens Programadas] Falha ao registrar histórico de erro: ${erroHistorico}`);
       }
 
       try {
-        await atualizarClienteCampanha(supabase, mensagem, "falhou", errorMessage);
+        await atualizarClienteCampanha(supabase, mensagem, "falhou", erroHistoricoRegistro);
         await recalcularCampanha(supabase, mensagem);
       } catch (campaignError) {
         console.error(`[Mensagens Programadas] Falha ao atualizar progresso da campanha: ${normalizarTextoErro(campaignError)}`);
       }
 
-      resultados.push({ id_msg_programada: mensagem.id_msg_programada, success: false, error: errorMessage });
+      resultados.push({ id_msg_programada: mensagem.id_msg_programada, success: false, error: erroHistoricoRegistro });
     }
   }
 

@@ -1,3 +1,5 @@
+import { extrairMensagemIdExterno } from "./btzapMessageStatus.ts";
+
 type SupabaseAdmin = any;
 
 export type TipoEnvioWhats = "geral" | "cobranca" | "campanha_promocao" | "aniversario" | "mensagem_programada";
@@ -120,7 +122,7 @@ function partesAgoraEm(data: Date, timeZone: string) {
 
 export async function buscarParametroWhats(supabase: SupabaseAdmin, empresaId: string, _tipoEnvio: string) {
   await supabase.rpc("fn_garantir_parametros_whats_empresa", { p_empresa_id: empresaId });
-  const { data, error } = await supabase.from("tab_parametro_whats").select("*").eq("empresa_id", empresaId).eq("tipo_envio", "geral").eq("ativo", true).maybeSingle();
+  const { data, error } = await supabase.from("tab_parametro_whats").select("*").eq("empresa_id", empresaId).eq("tipo_envio", "geral").maybeSingle();
   if (error) throw error;
   return data;
 }
@@ -142,6 +144,9 @@ export async function validarParametrosEnvioWhats(args: Omit<ProcessarEnvioArgs,
   const tipo = normalizarTipoEnvio(args.tipoEnvio);
   const parametro = await buscarParametroWhats(supabase, empresaId, tipo);
   if (!parametro) return { podeEnviar: false, motivo: "falha_sem_parametro_whats", proximaTentativaEm: null };
+  if (parametro.ativo !== true) {
+    return { podeEnviar: true, parametro, parametroId: parametro.id, filtrosParametrosIgnorados: true, proximaTentativaEm: null };
+  }
   if (tentativaAtual > Number(parametro.max_tentativas_reenvio ?? 0)) {
     return {
       podeEnviar: false,
@@ -209,15 +214,24 @@ async function registrar(args: Omit<ProcessarEnvioArgs, "enviarBtzap">, validaca
   const motivo = validacao.motivo ?? null;
   const statusHistorico = status === "enviado" ? "enviado" : motivoPendenteEnvio(motivo) || status === "pendente" ? "pendente" : "erro";
   const retornoErro = statusHistorico === "enviado" ? "OK" : erro ?? mensagemRetornoEnvio(motivo, validacao.detalhe);
+  const agora = new Date().toISOString();
+  const mensagemIdExterno = statusHistorico === "enviado" ? extrairMensagemIdExterno(retorno) : null;
   const payload = {
     id_empresa: args.empresaId, cliente_id: args.clienteId == null ? null : String(args.clienteId), cliente_nome: args.clienteNome ?? null,
     cliente_telefone: args.telefone, documento: args.documento ?? null,
     origem: args.origem || "WhatsApp", mensagem: args.mensagem, status: statusHistorico,
     tipo_envio: normalizarTipoEnvio(args.tipoEnvio), categoria_envio: normalizarTipoEnvio(args.tipoEnvio),
     operacao_envio: Number(args.tentativaAtual ?? 0) > 0 ? "reenvio" : "envio",
-    provider: "btzap", erro: retornoErro, motivo_bloqueio: motivo, proxima_tentativa_em: validacao.proximaTentativaEm ?? null,
+    provider: "btzap", erro: retornoErro, motivo_bloqueio: motivo,
+    ultima_tentativa_em: agora,
+    proxima_tentativa_em: statusHistorico === "pendente" ? validacao.proximaTentativaEm ?? null : null,
     tentativas: args.tentativaAtual ?? 0, parametro_whats_id: validacao.parametroId ?? null, intervalo_sorteado_segundos: validacao.intervaloSorteadoSegundos ?? null,
-    processado_em: status === "enviado" ? new Date().toISOString() : null, enviado_em: status === "enviado" ? new Date().toISOString() : null,
+    processado_em: status === "enviado" ? agora : null, enviado_em: status === "enviado" ? agora : null,
+    mensagem_id_externo: mensagemIdExterno,
+    btzap_message_id: mensagemIdExterno,
+    status_entrega: statusHistorico === "enviado" ? "ENVIADO_API" : statusHistorico === "erro" ? "FALHOU" : null,
+    enviado_api_em: statusHistorico === "enviado" ? agora : null,
+    falhou_em: statusHistorico === "erro" ? agora : null,
     referencia_id: args.referenciaId == null ? null : String(args.referenciaId), modelo_id: args.modeloId ?? null, response_payload: retorno ?? null,
   };
   const { data, error } = await args.supabase.from("tab_whatsapp_envios").insert(payload).select("id").single();

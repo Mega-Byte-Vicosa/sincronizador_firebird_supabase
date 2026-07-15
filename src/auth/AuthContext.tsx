@@ -2,6 +2,27 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { supabase } from "../lib/supabaseClient";
 
 const SESSION_KEY = "consulta_clipp_pro_saas_session";
+const TEMPO_LIMITE_VALIDACAO_MS = 10_000;
+
+function comTempoLimite<T>(promessa: PromiseLike<T>, tempoMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(
+      () => reject(new Error("Tempo limite excedido ao validar a sessão.")),
+      tempoMs,
+    );
+
+    Promise.resolve(promessa).then(
+      (resultado) => {
+        window.clearTimeout(timeout);
+        resolve(resultado);
+      },
+      (erro) => {
+        window.clearTimeout(timeout);
+        reject(erro);
+      },
+    );
+  });
+}
 
 export interface UsuarioSaas {
   id: string;
@@ -48,6 +69,9 @@ interface AtualizarPermissoesClienteParams {
 interface AuthContextValue {
   usuario: UsuarioSaas | null;
   carregando: boolean;
+  erroValidacao: string | null;
+  tentarValidarSessaoNovamente: () => void;
+  voltarAoLogin: () => void;
   entrar: (cnpj: string, usuario: string, senha: string) => Promise<AuthResult>;
   consultarPrimeiroAcesso: (cnpj: string, usuario: string) => Promise<PrimeiroAcessoStatus>;
   definirSenhaInicialAdmin: (cnpj: string, usuario: string, senha: string) => Promise<AuthResult>;
@@ -62,6 +86,8 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [usuario, setUsuario] = useState<UsuarioSaas | null>(null);
   const [carregando, setCarregando] = useState(true);
+  const [erroValidacao, setErroValidacao] = useState<string | null>(null);
+  const [tentativaValidacao, setTentativaValidacao] = useState(0);
 
   useEffect(() => {
     let ativo = true;
@@ -74,22 +100,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const { data, error } = await supabase.rpc("validar_sessao_saas", {
-        p_token: token,
-      });
+      try {
+        const { data, error } = await comTempoLimite(
+          supabase.rpc("validar_sessao_saas", { p_token: token }),
+          TEMPO_LIMITE_VALIDACAO_MS,
+        );
+        const resultado = data as AuthResult | null;
 
-      const resultado = data as AuthResult | null;
+        if (!ativo) return;
 
-      if (!ativo) return;
+        if (error) {
+          setErroValidacao("Não foi possível validar o acesso. Verifique sua conexão e tente novamente.");
+          return;
+        }
 
-      if (error || !resultado?.success || !resultado.usuario?.id_empresa) {
-        sessionStorage.removeItem(SESSION_KEY);
-        setUsuario(null);
-      } else {
+        if (!resultado?.success || !resultado.usuario?.id_empresa) {
+          sessionStorage.removeItem(SESSION_KEY);
+          setUsuario(null);
+          setErroValidacao(null);
+          return;
+        }
+
         setUsuario(resultado.usuario);
+        setErroValidacao(null);
+      } catch {
+        if (ativo) {
+          setErroValidacao("A validação do acesso demorou mais que o esperado. Tente novamente.");
+        }
+      } finally {
+        if (ativo) setCarregando(false);
       }
-
-      setCarregando(false);
     }
 
     void restaurarSessao();
@@ -97,7 +137,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       ativo = false;
     };
-  }, []);
+  }, [tentativaValidacao]);
+
+  function tentarValidarSessaoNovamente() {
+    setErroValidacao(null);
+    setCarregando(true);
+    setTentativaValidacao((tentativa) => tentativa + 1);
+  }
+
+  function voltarAoLogin() {
+    sessionStorage.removeItem(SESSION_KEY);
+    setUsuario(null);
+    setErroValidacao(null);
+    setCarregando(false);
+  }
 
   async function entrar(cnpj: string, nomeUsuario: string, senha: string) {
     const { data, error } = await supabase.rpc("autenticar_usuario_saas", {
@@ -233,6 +286,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       usuario,
       carregando,
+      erroValidacao,
+      tentarValidarSessaoNovamente,
+      voltarAoLogin,
       entrar,
       consultarPrimeiroAcesso,
       definirSenhaInicialAdmin,
@@ -241,7 +297,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       atualizarPermissoesCliente,
       sair,
     }),
-    [usuario, carregando],
+    [usuario, carregando, erroValidacao],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

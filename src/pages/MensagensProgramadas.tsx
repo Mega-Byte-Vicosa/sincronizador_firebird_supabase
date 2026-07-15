@@ -15,9 +15,12 @@ import { useAuth } from "../auth/AuthContext";
 import type { ModeloMensagem } from "../types/modeloMensagem";
 import {
   buscarTodosModelosMensagemAtivos,
+  buscarConfigModelosMensagem,
+  CONFIG_MODELOS_PADRAO,
   getChaveModeloMensagem,
   montarMensagemModeloContaReceber,
   selecionarModeloPadraoContaReceber,
+  type ConfigModelosMensagem,
 } from "../utils/modelosMensagem";
 
 interface FiltrosMensagensProgramadas {
@@ -109,6 +112,51 @@ const filtrosIniciais: FiltrosMensagensProgramadas = {
   tipoAgendamento: "todos",
   status: "todos",
 };
+
+const ITENS_POR_PAGINA_MENSAGENS = 100;
+
+const MENSAGENS_PROGRAMADAS_SELECT = [
+  "id_msg_programada",
+  "id_empresa",
+  "origem_modulo",
+  "id_origem",
+  "titulo",
+  "descricao",
+  "destinatario_nome",
+  "destinatario_telefone",
+  "mensagem",
+  "tipo_agendamento",
+  "data_envio",
+  "hora_envio",
+  "executar_em",
+  "executar_primeira_tentativa_em",
+  "executar_segunda_tentativa_em",
+  "processando_em",
+  "ultima_tentativa_em",
+  "tentativas_envio",
+  "tentativa_atual",
+  "gerada_por_bloqueio_parametros",
+  "motivo_pendencia",
+  "origem_tentativa",
+  "conta_receber_id",
+  "documento_origem",
+  "historico_envio_id",
+  "repetir",
+  "tipo_repeticao",
+  "intervalo_repeticao",
+  "quantidade_repeticoes",
+  "data_fim_repeticao",
+  "status",
+  "enviado",
+  "data_hora_envio",
+  "erro_envio",
+  "motivo_bloqueio",
+  "proxima_tentativa_em",
+  "ativo",
+  "modelo_id",
+  "criado_em",
+  "atualizado_em",
+].join(",");
 
 const moedaFormatter = new Intl.NumberFormat("pt-BR", {
   style: "currency",
@@ -281,7 +329,7 @@ function dataExecucaoFutura(mensagem: MensagemProgramada) {
 
 function normalizarStatusMensagemProgramada(mensagem: MensagemProgramada): StatusVisualMensagemProgramada {
   const status = normalizarTexto(mensagem.status);
-  const motivo = getMotivoBloqueioMensagemProgramada(mensagem);
+  const motivo = String(mensagem.motivo_pendencia ?? getMotivoBloqueioMensagemProgramada(mensagem)).trim();
 
   if (["enviado", "enviada", "sent", "delivered", "read", "sucesso", "processado"].includes(status)) return "enviada";
   if (motivosErroMensagemProgramada.has(status) || motivosErroMensagemProgramada.has(motivo)) return "erro";
@@ -331,6 +379,20 @@ function obterMensagemRetornoProgramada(mensagem: MensagemProgramada) {
   if (motivo === "erro_internet" || motivo === "erro_conexao") return "Erro de internet ou conexão.";
   if (motivo === "falha_api") return "Erro técnico na API de envio.";
   return "Erro técnico ao enviar mensagem.";
+}
+
+function getExecutarPrimeiraTentativa(mensagem: MensagemProgramada) {
+  return mensagem.executar_primeira_tentativa_em || mensagem.executar_em;
+}
+
+function renderOrigemDocumentoMensagem(mensagem: MensagemProgramada) {
+  const documento = mensagem.documento_origem || mensagem.id_origem;
+  return (
+    <div className="scheduled-origin-cell">
+      <strong>Origem: {formatarModulo(mensagem.origem_modulo)}</strong>
+      <span>Documento: {mostrarValor(documento)}</span>
+    </div>
+  );
 }
 
 function statusVisualParaFiltro(status: StatusVisualMensagemProgramada) {
@@ -480,7 +542,7 @@ function filtrarMensagensProgramadas(
 function mensagemAtendeFiltroCard(mensagem: MensagemProgramada, filtro: FiltroCardMensagem) {
   if (filtro === "todos") return true;
   const status = normalizarStatusMensagemProgramada(mensagem);
-  if (filtro === "padrao") return ["pendente", "agendada", "enviada"].includes(status);
+  if (filtro === "padrao") return ["pendente", "agendada", "erro"].includes(status);
   return statusVisualParaFiltro(status) === filtro;
 }
 
@@ -558,6 +620,8 @@ export function MensagensProgramadas() {
   const [form, setForm] = useState<FormMensagemProgramada>(() => formInicial());
   const [mensagemSelecionada, setMensagemSelecionada] = useState<MensagemProgramada | null>(null);
   const [exibindoFormulario, setExibindoFormulario] = useState(false);
+  const [paginaAtual, setPaginaAtual] = useState(1);
+  const [totalRegistros, setTotalRegistros] = useState(0);
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [executando, setExecutando] = useState(false);
@@ -569,6 +633,7 @@ export function MensagensProgramadas() {
   const listarMensagensProgramadas = useCallback(async () => {
     if (!usuario?.id_empresa) {
       setMensagens([]);
+      setTotalRegistros(0);
       setCarregando(false);
       return;
     }
@@ -576,27 +641,57 @@ export function MensagensProgramadas() {
     setCarregando(true);
     setErro(null);
 
-    const { data, error } = await supabase
-      .from("tb_msg_programadas")
-      .select("*")
-      .eq("id_empresa", usuario.id_empresa)
-      .eq("ativo", true)
-      .order("executar_em", { ascending: false, nullsFirst: false })
-      .order("criado_em", { ascending: false });
+    try {
+      const inicioPagina = (paginaAtual - 1) * ITENS_POR_PAGINA_MENSAGENS;
+      const fimPagina = inicioPagina + ITENS_POR_PAGINA_MENSAGENS - 1;
+      const busca = filtros.busca.trim();
+      const buscaTelefone = normalizarTelefone(busca);
+      let consulta = supabase
+        .from("tb_msg_programadas")
+        .select(MENSAGENS_PROGRAMADAS_SELECT, { count: "exact" })
+        .eq("id_empresa", usuario.id_empresa)
+        .eq("ativo", true);
 
-    if (error) {
+      if (filtros.dataInicial) consulta = consulta.gte("executar_em", dataInicioDia(filtros.dataInicial).toISOString());
+      if (filtros.dataFinal) consulta = consulta.lt("executar_em", dataDiaSeguinte(filtros.dataFinal).toISOString());
+      if (filtros.origemModulo !== "todos") consulta = consulta.eq("origem_modulo", filtros.origemModulo);
+      if (filtros.tipoAgendamento !== "todos") consulta = consulta.eq("tipo_agendamento", filtros.tipoAgendamento);
+      if (filtros.status !== "todos") consulta = consulta.eq("status", filtros.status);
+      if (busca) {
+        const filtrosBusca = [
+          `titulo.ilike.%${busca}%`,
+          `destinatario_nome.ilike.%${busca}%`,
+          `documento_origem.ilike.%${busca}%`,
+          `id_origem.ilike.%${busca}%`,
+        ];
+        if (buscaTelefone) filtrosBusca.push(`destinatario_telefone.ilike.%${buscaTelefone}%`);
+        consulta = consulta.or(filtrosBusca.join(","));
+      }
+
+      const { data, error, count } = await consulta
+        .order("executar_em", { ascending: false, nullsFirst: false })
+        .order("criado_em", { ascending: false })
+        .range(inicioPagina, fimPagina);
+
+      if (error) throw error;
+      setMensagens((data ?? []) as unknown as MensagemProgramada[]);
+      setTotalRegistros(count ?? data?.length ?? 0);
+    } catch (error) {
       setMensagens([]);
-      setErro(error.message);
-    } else {
-      setMensagens((data ?? []) as MensagemProgramada[]);
+      setTotalRegistros(0);
+      setErro(error instanceof Error ? error.message : "Não foi possível carregar as mensagens programadas.");
+    } finally {
+      setCarregando(false);
     }
-
-    setCarregando(false);
-  }, [usuario?.id_empresa]);
+  }, [filtros, paginaAtual, usuario?.id_empresa]);
 
   useEffect(() => {
     void listarMensagensProgramadas();
   }, [listarMensagensProgramadas]);
+
+  useEffect(() => {
+    setPaginaAtual(1);
+  }, [filtros, filtroCard]);
 
   const mensagensFiltradas = useMemo(
     () =>
@@ -605,6 +700,7 @@ export function MensagensProgramadas() {
       ),
     [filtroCard, filtros, mensagens],
   );
+  const totalPaginas = Math.max(1, Math.ceil(totalRegistros / ITENS_POR_PAGINA_MENSAGENS));
 
   const resumo = useMemo(
     () => ({
@@ -616,13 +712,6 @@ export function MensagensProgramadas() {
     }),
     [mensagens],
   );
-
-  function abrirNovoCadastro() {
-    setForm(formInicial());
-    setFeedback(null);
-    setErro(null);
-    setExibindoFormulario(true);
-  }
 
   function editarMensagemProgramada(mensagem: MensagemProgramada) {
     setForm({
@@ -876,6 +965,24 @@ export function MensagensProgramadas() {
     { label: "Com erro", value: resumo.erros, icon: "error", color: "vermelho", help: "Precisam de atenção", filtro: "ERRO" as const },
     { label: "Total", value: resumo.total, icon: "list", color: "ciano", help: "Todos os agendamentos", filtro: "todos" as const },
   ];
+  const filtrosAtivosMensagens = [
+    filtroCard === "padrao"
+      ? "Status: Pendentes, agendadas e com erro"
+      : filtroCard !== "todos"
+        ? `Status: ${cards.find((card) => card.filtro === filtroCard)?.label ?? filtroCard}`
+        : null,
+    filtros.busca.trim() ? `Busca: ${filtros.busca.trim()}` : null,
+    filtros.dataInicial ? `Data inicial: ${formatarData(filtros.dataInicial)}` : null,
+    filtros.dataFinal ? `Data final: ${formatarData(filtros.dataFinal)}` : null,
+    filtros.status !== "todos" ? `Status: ${filtros.status}` : null,
+    filtros.origemModulo !== "todos" ? `Origem: ${formatarModulo(filtros.origemModulo)}` : null,
+    filtros.tipoAgendamento !== "todos" ? `Tipo: ${formatarTipoAgendamento(filtros.tipoAgendamento)}` : null,
+  ].filter((filtro): filtro is string => Boolean(filtro));
+
+  function limparFiltrosMensagens() {
+    setFiltroCard("todos");
+    setFiltros({ busca: "", dataInicial: "", dataFinal: "", origemModulo: "todos", tipoAgendamento: "todos", status: "todos" });
+  }
 
   return (
     <main className="page-shell scheduled-page">
@@ -885,15 +992,12 @@ export function MensagensProgramadas() {
             Atualizar
           </button>
           <button
-            className="secondary-button"
+            className="primary-button"
             type="button"
             onClick={() => void executarMensagensProgramadas()}
             disabled={executando}
           >
             {executando ? "Executando..." : "Executar agendadas"}
-          </button>
-          <button className="primary-button" type="button" onClick={abrirNovoCadastro}>
-            Nova mensagem
           </button>
         </>
       } />
@@ -902,7 +1006,7 @@ export function MensagensProgramadas() {
         {cards.map((card) => {
           const ativo =
             filtroCard === card.filtro ||
-            (filtroCard === "padrao" && ["PENDENTE", "AGENDADO", "ENVIADO"].includes(card.filtro));
+            (filtroCard === "padrao" && ["PENDENTE", "AGENDADO", "ERRO"].includes(card.filtro));
 
           return (
           <button
@@ -996,6 +1100,20 @@ export function MensagensProgramadas() {
             <option value="RECORRENTE">Recorrente</option>
           </select>
         </label>
+
+        {filtrosAtivosMensagens.length > 0 && (
+          <div className="active-filters-bar filters-active-full">
+            <div className="active-filters-info">
+              <span className="active-filters-label">Filtro ativo:</span>
+              {filtrosAtivosMensagens.map((filtro) => (
+                <span className="active-filter-chip" key={filtro}>{filtro}</span>
+              ))}
+            </div>
+            <button className="active-filters-clear" type="button" onClick={limparFiltrosMensagens}>
+              Limpar filtros
+            </button>
+          </div>
+        )}
       </section>
 
       {feedback && <div className="feedback-box feedback-success">{feedback}</div>}
@@ -1004,7 +1122,7 @@ export function MensagensProgramadas() {
       <section className="results-section">
         <div className="section-title">
           <h2>Agendamentos</h2>
-          <span>{mensagensFiltradas.length} registro(s)</span>
+          <span>{totalRegistros} registro(s)</span>
         </div>
 
         {carregando && <div className="state-box">Carregando mensagens programadas...</div>}
@@ -1017,15 +1135,16 @@ export function MensagensProgramadas() {
             <table className="scheduled-table">
               <thead>
                 <tr>
-                  <th>Origem</th>
+                  <th>Origem / Documento</th>
                   <th>Título</th>
                   <th>Destinatário</th>
                   <th>Telefone</th>
                   <th>Criado em</th>
-                  <th>Executar em</th>
-                  <th>Tipo</th>
-                  <th>Repetição</th>
+                  <th>Executar em 1ª Tentativa</th>
+                  <th>Executar em 2ª Tentativa</th>
                   <th>Status</th>
+                  <th>Repetição</th>
+                  <th>Tipo</th>
                   <th>Retorno / Erro</th>
                   <th>Enviado em</th>
                   <th>Ações</th>
@@ -1048,19 +1167,27 @@ export function MensagensProgramadas() {
                         if (event.key === "Enter" || event.key === " ") setMensagemSelecionada(mensagemAtual);
                       }}
                     >
-                      <td>{formatarModulo(mensagem.origem_modulo)}</td>
-                      <td>{mostrarValor(mensagem.titulo)}</td>
+                      <td>{renderOrigemDocumentoMensagem(mensagem)}</td>
+                      <td className="scheduled-title-cell">
+                        <span>{mostrarValor(mensagem.titulo)}</span>
+                        {mensagem.gerada_por_bloqueio_parametros && (
+                          <small>
+                            Criada automaticamente a partir de Contas a Receber porque uma tentativa de envio extrapolou os parametros.
+                          </small>
+                        )}
+                      </td>
                       <td>{mostrarValor(mensagem.destinatario_nome)}</td>
                       <td>{mostrarValor(mensagem.destinatario_telefone)}</td>
                       <td>{formatarDataHora(mensagem.criado_em)}</td>
-                      <td>{formatarDataHora(mensagem.executar_em)}</td>
-                      <td>{formatarTipoAgendamento(mensagem.tipo_agendamento)}</td>
-                      <td>{mensagem.repetir ? mostrarValor(mensagem.tipo_repeticao) : "Não"}</td>
+                      <td>{formatarDataHora(getExecutarPrimeiraTentativa(mensagem))}</td>
+                      <td>{mensagem.executar_segunda_tentativa_em ? formatarDataHora(mensagem.executar_segunda_tentativa_em) : "Nao definida"}</td>
                       <td>
                         <span className={getStatusClassProgramada(mensagem)} title={retornoErro}>
                           {labelStatusMensagemProgramada(mensagem)}
                         </span>
                       </td>
+                      <td>{mensagem.repetir ? mostrarValor(mensagem.tipo_repeticao) : "Não"}</td>
+                      <td>{formatarTipoAgendamento(mensagem.tipo_agendamento)}</td>
                       <td title={retornoErro}>{mostrarValor(retornoErro)}</td>
                       <td>{formatarDataHora(mensagem.data_hora_envio)}</td>
                       <td>
@@ -1150,6 +1277,28 @@ export function MensagensProgramadas() {
               </tbody>
             </table>
           </div>
+        )}
+
+        {totalRegistros > 0 && (
+          <nav className="receivables-pagination" aria-label="Paginação de mensagens programadas">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={carregando || paginaAtual <= 1}
+              onClick={() => setPaginaAtual((pagina) => Math.max(1, pagina - 1))}
+            >
+              Anterior
+            </button>
+            <span>Página <strong>{paginaAtual}</strong> de <strong>{totalPaginas}</strong></span>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={carregando || paginaAtual >= totalPaginas}
+              onClick={() => setPaginaAtual((pagina) => Math.min(totalPaginas, pagina + 1))}
+            >
+              Próxima
+            </button>
+          </nav>
         )}
       </section>
 
@@ -1400,6 +1549,16 @@ export function MensagensProgramadas() {
                   <dd>{formatarModulo(mensagemSelecionada.origem_modulo)}</dd>
                 </div>
                 <div>
+                  <dt>Documento</dt>
+                  <dd>{mostrarValor(mensagemSelecionada.documento_origem || mensagemSelecionada.id_origem)}</dd>
+                </div>
+                {mensagemSelecionada.gerada_por_bloqueio_parametros && (
+                  <div>
+                    <dt>Origem da tentativa</dt>
+                    <dd>Criada automaticamente porque uma tentativa de envio extrapolou os parametros.</dd>
+                  </div>
+                )}
+                <div>
                   <dt>ID de origem</dt>
                   <dd>{mostrarValor(mensagemSelecionada.id_origem)}</dd>
                 </div>
@@ -1408,8 +1567,12 @@ export function MensagensProgramadas() {
                   <dd>{formatarDataHora(mensagemSelecionada.criado_em)}</dd>
                 </div>
                 <div>
-                  <dt>Executar em</dt>
-                  <dd>{formatarDataHora(mensagemSelecionada.executar_em)}</dd>
+                  <dt>Executar em 1ª Tentativa</dt>
+                  <dd>{formatarDataHora(getExecutarPrimeiraTentativa(mensagemSelecionada))}</dd>
+                </div>
+                <div>
+                  <dt>Executar em 2ª Tentativa</dt>
+                  <dd>{mensagemSelecionada.executar_segunda_tentativa_em ? formatarDataHora(mensagemSelecionada.executar_segunda_tentativa_em) : "Nao definida"}</dd>
                 </div>
                 <div>
                   <dt>Status</dt>
@@ -1655,6 +1818,7 @@ export function ProgramarMensagemContaReceberModal({
   const [erro, setErro] = useState<string | null>(null);
   const [exibirDatasProgramadas, setExibirDatasProgramadas] = useState(false);
   const [modelos, setModelos] = useState<ModeloMensagem[]>([]);
+  const [configModelos, setConfigModelos] = useState<ConfigModelosMensagem>(CONFIG_MODELOS_PADRAO);
   const [modeloSelecionado, setModeloSelecionado] = useState("");
   const [modeloSugerido, setModeloSugerido] = useState<string | null>(null);
   const [avisoModelo, setAvisoModelo] = useState<string | null>(null);
@@ -1667,8 +1831,11 @@ export function ProgramarMensagemContaReceberModal({
       return () => { ativo = false; };
     }
     void buscarTodosModelosMensagemAtivos(usuario.id_empresa)
-      .then((dados) => {
+      .then(async (dados) => {
         if (!ativo) return;
+        const config = await buscarConfigModelosMensagem().catch(() => CONFIG_MODELOS_PADRAO);
+        if (!ativo) return;
+        setConfigModelos(config);
         const sugestao = selecionarModeloPadraoContaReceber(conta, dados);
         const chaveSugerida = sugestao ? getChaveModeloMensagem(sugestao) : "";
         setModelos(dados);
@@ -1681,7 +1848,7 @@ export function ProgramarMensagemContaReceberModal({
             modelo_id: sugestao.id,
             mensagem: montarMensagemModeloContaReceber(conta, sugestao, {
               nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
-            }),
+            }, config),
           }));
         }
       })
@@ -1700,7 +1867,7 @@ export function ProgramarMensagemContaReceberModal({
     }
     const mensagem = montarMensagemModeloContaReceber(conta, modelo, {
       nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
-    });
+    }, configModelos);
     setForm({ ...form, modelo_id: modelo.id, mensagem });
   }
 
