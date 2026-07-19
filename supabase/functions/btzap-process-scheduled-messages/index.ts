@@ -1,5 +1,5 @@
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
-import { sendBtzapMessage, validateBtzapConfig } from "../_shared/btzapClient.ts";
+import { sendBtzapMediaMessage, sendBtzapMessage, validateBtzapConfig } from "../_shared/btzapClient.ts";
 import type { BtzapConfig } from "../_shared/btzapClient.ts";
 import { extrairDadosInstancia, montarEndpoint } from "../_shared/btzapInstance.ts";
 import { extrairMensagemIdExterno } from "../_shared/btzapMessageStatus.ts";
@@ -40,6 +40,12 @@ interface ContaReceberOrigem {
   cliente_id: string | number | null;
 }
 
+interface MidiaCampanhaOrigem {
+  arquivo_url: string | null;
+  arquivo_nome: string | null;
+  arquivo_tipo: string | null;
+}
+
 function normalizarTextoErro(valor: unknown): string {
   if (typeof valor === "string") return valor.trim();
   if (valor instanceof Error) return valor.message;
@@ -60,11 +66,16 @@ function formatarCobrancaProgramadaParaEnvio(mensagem: MensagemProgramada) {
   if (mensagem.origem_modulo !== "CONTA_RECEBER" || !conteudoOriginal.trim()) return conteudoOriginal;
 
   const inicio = conteudoOriginal.trimStart().toLowerCase();
-  if (inicio.startsWith("*mensagem programada:*") || inicio.startsWith("mensagem programada:")) {
+  if (
+    inicio.startsWith("*mensagem programada*") ||
+    inicio.startsWith("*mensagem programada:*") ||
+    inicio.startsWith("mensagem programada") ||
+    inicio.startsWith("mensagem programada:")
+  ) {
     return conteudoOriginal;
   }
 
-  return `*Mensagem programada:*\n\n${conteudoOriginal}`;
+  return `*Mensagem programada*\n\n${conteudoOriginal}`;
 }
 
 function normalizarTelefoneBrasil(valor: string | null | undefined) {
@@ -72,6 +83,55 @@ function normalizarTelefoneBrasil(valor: string | null | undefined) {
   if (digitos.length === 10 || digitos.length === 11) return `55${digitos}`;
   if ((digitos.length === 12 || digitos.length === 13) && digitos.startsWith("55")) return digitos;
   return null;
+}
+
+function tipoMidiaAgendada(arquivoTipo?: unknown, arquivoUrl?: unknown): "image" | "video" | null {
+  const tipo = String(arquivoTipo ?? "").toLowerCase();
+  const url = String(arquivoUrl ?? "").split("?")[0].split("#")[0].toLowerCase();
+  if (tipo.startsWith("image/") || /\.(png|jpe?g|webp)$/.test(url)) return "image";
+  if (tipo.startsWith("video/") || /\.mp4$/.test(url)) return "video";
+  return null;
+}
+
+async function enviarMensagemProgramadaBtzap(config: BtzapConfig, payload: { phone: string; message: string; arquivo_url?: unknown; arquivo_tipo?: unknown }) {
+  const arquivoUrl = String(payload.arquivo_url ?? "").trim();
+  const tipo = tipoMidiaAgendada(payload.arquivo_tipo, arquivoUrl);
+  if (arquivoUrl && tipo) {
+    const midia = await sendBtzapMediaMessage(config, { phone: payload.phone, type: tipo, file: arquivoUrl });
+    if (!midia.success) return midia;
+    const texto = await sendBtzapMessage(config, { phone: payload.phone, message: payload.message });
+    if (!texto.success) return texto;
+    return {
+      success: true,
+      message: "Mídia e texto enviados com sucesso.",
+      envios: [
+        { mensagem: `[${tipo === "image" ? "Imagem" : "Vídeo"} da campanha]`, retorno: "retorno" in midia ? midia.retorno ?? null : midia },
+        { mensagem: payload.message, retorno: "retorno" in texto ? texto.retorno ?? null : texto },
+      ],
+    };
+  }
+  return await sendBtzapMessage(config, { phone: payload.phone, message: payload.message });
+}
+
+async function obterMidiaCampanhaOrigem(
+  supabase: ReturnType<typeof createSupabaseAdmin>,
+  mensagem: MensagemProgramada,
+): Promise<MidiaCampanhaOrigem | null> {
+  if (mensagem.origem_modulo !== "CAMPANHA" || !mensagem.id_origem) return null;
+
+  const { data, error } = await supabase
+    .from("tab_campanha")
+    .select("arquivo_url, arquivo_nome, arquivo_tipo")
+    .eq("id_empresa", mensagem.id_empresa)
+    .eq("id", mensagem.id_origem)
+    .maybeSingle();
+
+  if (error) {
+    console.warn("[Mensagens Programadas] Não foi possível consultar mídia da campanha.", error.message);
+    return null;
+  }
+
+  return (data ?? null) as MidiaCampanhaOrigem | null;
 }
 
 function aguardar(ms: number) {
@@ -326,19 +386,7 @@ async function registrarHistoricoMensagemProgramada(
     modelo_id: mensagem.modelo_id ?? null,
   };
 
-  const { data: historicoExistente, error: buscaError } = await supabase
-    .from("tab_whatsapp_envios")
-    .select("id")
-    .eq("id_empresa", mensagem.id_empresa)
-    .eq("origem_modulo", mensagem.origem_modulo)
-    .eq("id_msg_programada", mensagem.id_msg_programada)
-    .maybeSingle();
-
-  if (buscaError) throw buscaError;
-
-  const { error } = historicoExistente?.id
-    ? await supabase.from("tab_whatsapp_envios").update(historicoPayload).eq("id", historicoExistente.id)
-    : await supabase.from("tab_whatsapp_envios").insert(historicoPayload);
+  const { error } = await supabase.from("tab_whatsapp_envios").insert(historicoPayload);
 
   if (error) throw error;
 }
@@ -648,7 +696,7 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
     const mensagem = await reservarMensagemParaProcessamento(supabase, mensagemEncontrada);
     if (!mensagem) continue;
     const conteudoParaEnvio = formatarCobrancaProgramadaParaEnvio(mensagem);
-    let requestPayload: { phone: string | null; message: string } | null = null;
+    let requestPayload: { phone: string; message: string; arquivo_url?: unknown; arquivo_nome?: unknown; arquivo_tipo?: unknown } | null = null;
     let responsePayload: unknown = null;
     let contaOrigem: ContaReceberOrigem = { id_ctarec: null, documento: null, cliente_id: null };
 
@@ -675,9 +723,13 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
       if (!telefone) throw new Error("Telefone do destinatário inválido ou não informado.");
 
       console.log("[Mensagens Programadas] Telefone validado. Enviando mensagem via BTZap.");
+      const midiaCampanha = await obterMidiaCampanhaOrigem(supabase, mensagem);
       requestPayload = {
         phone: telefone,
         message: conteudoParaEnvio,
+        arquivo_url: midiaCampanha?.arquivo_url ?? null,
+        arquivo_nome: midiaCampanha?.arquivo_nome ?? null,
+        arquivo_tipo: midiaCampanha?.arquivo_tipo ?? null,
       };
       const categoriaEnvio = normalizarTipoEnvio(
         mensagem.tipo_envio || (mensagem.origem_modulo === "CONTA_RECEBER" ? "cobranca" : mensagem.origem_modulo === "CAMPANHA" ? "campanha_promocao" : "mensagem_programada"),
@@ -695,8 +747,9 @@ async function executarMensagensProgramadas(idEmpresa?: string | null) {
         referenciaId: mensagem.id_origem || mensagem.id_msg_programada,
         modeloId: mensagem.modelo_id ?? null,
         tentativaAtual: Number(mensagem.tentativas_envio ?? 0),
+        quantidadeMensagens: midiaCampanha?.arquivo_url && tipoMidiaAgendada(midiaCampanha.arquivo_tipo, midiaCampanha.arquivo_url) ? 2 : 1,
         enviarBtzap: async () => {
-          const result = await sendBtzapMessage(config, requestPayload!);
+          const result = await enviarMensagemProgramadaBtzap(config, requestPayload!);
           if (!result.success) throw new Error(result.message);
           return "retorno" in result ? result.retorno ?? null : result;
         },

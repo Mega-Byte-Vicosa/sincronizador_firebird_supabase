@@ -1,4 +1,4 @@
-import { sendBtzapMessage, validateBtzapConfig, type BtzapConfig } from "./btzapClient.ts";
+import { sendBtzapMediaMessage, sendBtzapMessage, validateBtzapConfig, type BtzapConfig } from "./btzapClient.ts";
 import { extrairDadosInstancia, montarEndpoint } from "./btzapInstance.ts";
 import { extrairMensagemIdExterno } from "./btzapMessageStatus.ts";
 import { createSupabaseAdmin } from "./supabaseAdmin.ts";
@@ -29,6 +29,9 @@ interface CampanhaAutomatizada {
   automacao_proxima_execucao_em: string | null;
   automacao_total_envios: number;
   automacao_total_erros: number;
+  arquivo_url: string | null;
+  arquivo_nome: string | null;
+  arquivo_tipo: string | null;
 }
 
 interface ClienteAutomacao {
@@ -108,6 +111,45 @@ function deslocarDias(data: DataCivil, dias: number): DataCivil {
 
 function compararDatas(a: DataCivil, b: DataCivil) {
   return chaveData(a).localeCompare(chaveData(b));
+}
+
+function tipoMidiaCampanha(arquivoTipo?: unknown, arquivoUrl?: unknown): "image" | "video" | null {
+  const tipo = String(arquivoTipo ?? "").toLowerCase();
+  const url = String(arquivoUrl ?? "").split("?")[0].split("#")[0].toLowerCase();
+  if (tipo.startsWith("image/") || /\.(png|jpe?g|webp)$/.test(url)) return "image";
+  if (tipo.startsWith("video/") || /\.mp4$/.test(url)) return "video";
+  return null;
+}
+
+function quantidadeMensagensCampanha(arquivoTipo?: unknown, arquivoUrl?: unknown) {
+  const url = String(arquivoUrl ?? "").trim();
+  return url && tipoMidiaCampanha(arquivoTipo, url) ? 2 : 1;
+}
+
+async function enviarMensagemCampanhaBtzap(
+  config: BtzapConfig,
+  telefone: string,
+  mensagem: string,
+  arquivoUrl?: unknown,
+  arquivoTipo?: unknown,
+) {
+  const url = String(arquivoUrl ?? "").trim();
+  const tipo = tipoMidiaCampanha(arquivoTipo, url);
+  if (url && tipo) {
+    const midia = await sendBtzapMediaMessage(config, { phone: telefone, type: tipo, file: url });
+    if (!midia.success) return midia;
+    const texto = await sendBtzapMessage(config, { phone: telefone, message: mensagem });
+    if (!texto.success) return texto;
+    return {
+      success: true,
+      message: "Mídia e texto enviados com sucesso.",
+      envios: [
+        { mensagem: `[${tipo === "image" ? "Imagem" : "Vídeo"} da campanha]`, retorno: "retorno" in midia ? midia.retorno ?? null : midia },
+        { mensagem, retorno: "retorno" in texto ? texto.retorno ?? null : texto },
+      ],
+    };
+  }
+  return await sendBtzapMessage(config, { phone: telefone, message: mensagem });
 }
 
 function partesNoFuso(data: Date, timeZone: string) {
@@ -669,6 +711,19 @@ async function processarPendenciasAutomacao(supabase: ReturnType<typeof createSu
   const { data, error } = await query;
   if (error) throw error;
 
+  const idsCampanhas = [...new Set((data ?? []).map((item) => String(item.id_campanha ?? "")).filter(Boolean))];
+  const campanhasAtivas = new Set<string>();
+  if (idsCampanhas.length > 0) {
+    const { data: campanhas, error: campanhasError } = await supabase
+      .from("tab_campanha")
+      .select("id")
+      .in("id", idsCampanhas)
+      .neq("status", "cancelada")
+      .eq("automacao_status", "ativa");
+    if (campanhasError) throw campanhasError;
+    for (const campanha of campanhas ?? []) campanhasAtivas.add(String(campanha.id));
+  }
+
   let enviados = 0;
   let erros = 0;
   let tentativas = 0;
@@ -677,6 +732,16 @@ async function processarPendenciasAutomacao(supabase: ReturnType<typeof createSu
 
   for (const raw of data ?? []) {
     const item = raw as ItemAutomacaoPendente;
+    if (!campanhasAtivas.has(item.id_campanha)) {
+      await supabase.from("tab_automacao_execucao_itens").update({
+        status: "cancelado",
+        erro_envio: "Campanha cancelada ou automação encerrada.",
+        motivo_bloqueio: "campanha_cancelada",
+        proxima_tentativa_em: null,
+        atualizado_em: new Date().toISOString(),
+      }).eq("id", item.id);
+      continue;
+    }
     campanhasAtualizadas.set(item.id_campanha, item.id_empresa);
     const telefone = String(item.cliente_telefone ?? "").replace(/\D/g, "");
     const mensagem = String(item.mensagem ?? "");
@@ -712,6 +777,7 @@ async function processarPendenciasAutomacao(supabase: ReturnType<typeof createSu
         origem: "AUTOMACAO",
         referenciaId: item.id_campanha,
         tentativaAtual: Number(item.tentativa_atual ?? 0) + 1,
+        quantidadeMensagens: quantidadeMensagensCampanha(item.request_payload?.arquivo_tipo, item.request_payload?.arquivo_url),
       });
       if (!validacao.podeEnviar && validacao.proximaTentativaEm) {
         await atualizarBloqueioTemporarioAutomacao(supabase, item, validacao);
@@ -730,8 +796,9 @@ async function processarPendenciasAutomacao(supabase: ReturnType<typeof createSu
         origem: "AUTOMACAO",
         referenciaId: item.id_campanha,
         tentativaAtual: Number(item.tentativa_atual ?? 0) + 1,
+        quantidadeMensagens: quantidadeMensagensCampanha(item.request_payload?.arquivo_tipo, item.request_payload?.arquivo_url),
         enviarBtzap: async () => {
-          const result = await sendBtzapMessage(config!, { phone: telefone, message: mensagem });
+          const result = await enviarMensagemCampanhaBtzap(config!, telefone, mensagem, item.request_payload?.arquivo_url, item.request_payload?.arquivo_tipo);
           if (!result.success) throw new Error(result.message);
           return "retorno" in result ? result.retorno ?? null : result;
         },
@@ -760,8 +827,8 @@ async function processarPendenciasAutomacao(supabase: ReturnType<typeof createSu
 export async function processarCampanhasAutomatizadas(
   supabase: ReturnType<typeof createSupabaseAdmin>, idEmpresa?: string | null,
 ) {
-  let query = supabase.from("tab_campanha").select("id, id_empresa, nome, mensagem, tipo_automacao, automacao_dias_antes_vencimento, automacao_dias_sem_compra, automacao_dias_pos_compra, automacao_repeticao_tipo, automacao_dias_semana, automacao_meses, automacao_horarios, automacao_timezone, empresa_destino, aos_cuidados, campanha_continua, termina_em, data_hora_agendamento, automacao_proxima_execucao_em, automacao_total_envios, automacao_total_erros")
-    .eq("automatizada", true).eq("publico_dinamico", true).eq("automacao_status", "ativa").eq("tipo_comunicacao", "whatsapp")
+  let query = supabase.from("tab_campanha").select("id, id_empresa, nome, mensagem, tipo_automacao, automacao_dias_antes_vencimento, automacao_dias_sem_compra, automacao_dias_pos_compra, automacao_repeticao_tipo, automacao_dias_semana, automacao_meses, automacao_horarios, automacao_timezone, empresa_destino, aos_cuidados, campanha_continua, termina_em, data_hora_agendamento, automacao_proxima_execucao_em, automacao_total_envios, automacao_total_erros, arquivo_url, arquivo_nome, arquivo_tipo")
+    .eq("automatizada", true).eq("publico_dinamico", true).eq("automacao_status", "ativa").neq("status", "cancelada").eq("tipo_comunicacao", "whatsapp")
     .order("criado_em", { ascending: true }).limit(20);
   if (idEmpresa) query = query.eq("id_empresa", idEmpresa);
   const { data, error } = await query;
@@ -836,6 +903,9 @@ export async function processarCampanhasAutomatizadas(
             vlr_ctarec: conta.vlr_ctarec,
             valor_atual: calcularValorAtualConta(conta, hoje),
             tipo_automacao: campanha.tipo_automacao,
+            arquivo_url: campanha.arquivo_url,
+            arquivo_nome: campanha.arquivo_nome,
+            arquivo_tipo: campanha.arquivo_tipo,
           };
           let responsePayload: unknown = null;
           try {
@@ -843,6 +913,7 @@ export async function processarCampanhasAutomatizadas(
               supabase, empresaId: campanha.id_empresa, tipoEnvio: "cobranca", clienteId: conta.id_cliente,
               clienteNome: conta.cliente_nome, documento: conta.documento,
               telefone, mensagem, origem: "AUTOMACAO", referenciaId: campanha.id,
+              quantidadeMensagens: quantidadeMensagensCampanha(campanha.arquivo_tipo, campanha.arquivo_url),
             });
             if (!validacao.podeEnviar && validacao.proximaTentativaEm) {
               await registrarItemAutomacao(supabase, {
@@ -863,8 +934,9 @@ export async function processarCampanhasAutomatizadas(
               supabase, empresaId: campanha.id_empresa, tipoEnvio: "cobranca", clienteId: conta.id_cliente,
               clienteNome: conta.cliente_nome, documento: conta.documento,
               telefone, mensagem, origem: "AUTOMACAO", referenciaId: campanha.id,
+              quantidadeMensagens: quantidadeMensagensCampanha(campanha.arquivo_tipo, campanha.arquivo_url),
               enviarBtzap: async () => {
-                const result = await sendBtzapMessage(config, { phone: telefone, message: mensagem });
+                const result = await enviarMensagemCampanhaBtzap(config, telefone, mensagem, campanha.arquivo_url, campanha.arquivo_tipo);
                 if (!result.success) throw new Error(result.message);
                 return "retorno" in result ? result.retorno ?? null : result;
               },
@@ -947,13 +1019,21 @@ export async function processarCampanhasAutomatizadas(
         const telefone = telefoneBrasil(cliente)!;
         if (await jaEnviadoNoPeriodo(supabase, campanha, cliente, telefone, hoje)) continue;
         const mensagem = aplicarVariaveis(campanha, cliente, hoje, configModelos, nomeEmpresaSistema);
-        const requestPayload = { phone: telefone, message: mensagem, ciclo_automacao: cliente.dt_ultcomp?.split("T")[0] ?? chaveData(hoje) };
+        const requestPayload = {
+          phone: telefone,
+          message: mensagem,
+          ciclo_automacao: cliente.dt_ultcomp?.split("T")[0] ?? chaveData(hoje),
+          arquivo_url: campanha.arquivo_url,
+          arquivo_nome: campanha.arquivo_nome,
+          arquivo_tipo: campanha.arquivo_tipo,
+        };
         let responsePayload: unknown = null;
         try {
           const tipoEnvio = campanha.tipo_automacao.startsWith("aniversariantes") ? "aniversario" : "campanha_promocao";
           const validacao = await validarParametrosEnvioWhats({
             supabase, empresaId: campanha.id_empresa, tipoEnvio, clienteId: cliente.id_cliente, clienteNome: cliente.nome,
             telefone, mensagem, origem: "AUTOMACAO", referenciaId: campanha.id,
+            quantidadeMensagens: quantidadeMensagensCampanha(campanha.arquivo_tipo, campanha.arquivo_url),
           });
           if (!validacao.podeEnviar && validacao.proximaTentativaEm) {
             await registrarItemAutomacao(supabase, {
@@ -973,8 +1053,9 @@ export async function processarCampanhasAutomatizadas(
           const protegido = await processarEnvioWhatsApp({
             supabase, empresaId: campanha.id_empresa, tipoEnvio, clienteId: cliente.id_cliente, clienteNome: cliente.nome,
             telefone, mensagem, origem: "AUTOMACAO", referenciaId: campanha.id,
+            quantidadeMensagens: quantidadeMensagensCampanha(campanha.arquivo_tipo, campanha.arquivo_url),
             enviarBtzap: async () => {
-              const result = await sendBtzapMessage(config, { phone: telefone, message: mensagem });
+              const result = await enviarMensagemCampanhaBtzap(config, telefone, mensagem, campanha.arquivo_url, campanha.arquivo_tipo);
               if (!result.success) throw new Error(result.message);
               return "retorno" in result ? result.retorno ?? null : result;
             },

@@ -3,6 +3,7 @@ export interface BtzapConfig {
   token_instancia: string | null;
   url_servidor: string | null;
   endpoint_envio_texto?: string | null;
+  endpoint_envio_media?: string | null;
   metodo_envio_texto?: string | null;
   formato_payload?: string | null;
   ativo: boolean | null;
@@ -11,6 +12,14 @@ export interface BtzapConfig {
 export interface SendMessageParams {
   phone: string;
   message: string;
+}
+
+export interface SendMediaMessageParams {
+  phone: string;
+  type: "image" | "video" | "audio" | "ptt" | "myaudio" | "document";
+  file: string;
+  caption?: string | null;
+  filename?: string | null;
 }
 
 function normalizarTelefone(phone: string) {
@@ -29,6 +38,19 @@ function montarPayload(formatoPayload: string | null | undefined, telefoneNormal
     number: telefoneNormalizado,
     text: mensagem,
   };
+}
+
+function montarPayloadMedia(_formatoPayload: string | null | undefined, params: SendMediaMessageParams) {
+  const payload: Record<string, unknown> = {
+    number: normalizarTelefone(params.phone),
+    type: params.type,
+    file: params.file,
+  };
+
+  if (params.caption && ["image", "video"].includes(params.type)) payload.caption = params.caption;
+  if (params.filename && params.type === "document") payload.filename = params.filename;
+
+  return payload;
 }
 
 function textoDoRetorno(retorno: unknown): string {
@@ -157,6 +179,57 @@ export async function sendBtzapMessage(config: BtzapConfig, params: SendMessageP
   return {
     success: true,
     message: "Mensagem enviada com sucesso.",
+    endpoint,
+    payload,
+    retorno,
+    status: response.status,
+  };
+}
+
+export async function sendBtzapMediaMessage(config: BtzapConfig, params: SendMediaMessageParams) {
+  const validationError = validateBtzapConfig(config);
+
+  if (validationError) {
+    return {
+      success: false,
+      message: validationError,
+    };
+  }
+
+  const urlBase = config.url_servidor!.replace(/\/+$/, "");
+  const endpointTemplate = config.endpoint_envio_media || "/send/media";
+  const endpointPath = endpointTemplate.replace("{instance}", encodeURIComponent(config.nome_instancia!));
+  const endpoint = `${urlBase}${endpointPath.startsWith("/") ? endpointPath : "/" + endpointPath}`;
+  const method = (config.metodo_envio_texto || "POST").trim().toUpperCase();
+  const payload = montarPayloadMedia(config.formato_payload, params);
+
+  const response = await fetch(endpoint, {
+    method,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      token: config.token_instancia!,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const retorno = await lerRetorno(response);
+
+  if (!response.ok) {
+    return {
+      success: false,
+      message: mensagemAmigavelBtzap(response.status, retorno),
+      detail: textoDoRetorno(retorno),
+      endpoint,
+      payload,
+      retorno,
+      status: response.status,
+    };
+  }
+
+  return {
+    success: true,
+    message: "Mídia enviada com sucesso.",
     endpoint,
     payload,
     retorno,

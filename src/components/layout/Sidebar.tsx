@@ -63,12 +63,12 @@ const groups: Array<{ title: string; items: SidebarItem[] }> = [
 ];
 
 export function Sidebar({ activePath, collapsed, mobileOpen, onCollapse, onNavigate }: SidebarProps) {
-  const [campaignsOpen, setCampaignsOpen] = useState(() => activePath.startsWith("/campanhas-promocao"));
-  const [settingsOpen, setSettingsOpen] = useState(() => activePath.startsWith("/configuracoes"));
+  const [campaignsOpen, setCampaignsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
-    if (activePath.startsWith("/campanhas-promocao")) setCampaignsOpen(true);
-    if (activePath.startsWith("/configuracoes")) setSettingsOpen(true);
+    if (!activePath.startsWith("/campanhas-promocao")) setCampaignsOpen(false);
+    if (!activePath.startsWith("/configuracoes")) setSettingsOpen(false);
   }, [activePath]);
 
   return (
@@ -124,6 +124,8 @@ export function Sidebar({ activePath, collapsed, mobileOpen, onCollapse, onNavig
                           onClick={(event) => {
                             event.preventDefault();
                             onNavigate(child.path);
+                            if (configuracoes) setSettingsOpen(false);
+                            else setCampaignsOpen(false);
                           }}
                         >
                           <span aria-hidden="true" />
@@ -146,6 +148,8 @@ export function Sidebar({ activePath, collapsed, mobileOpen, onCollapse, onNavig
                   onClick={(event) => {
                     event.preventDefault();
                     onNavigate(item.path!);
+                    setCampaignsOpen(false);
+                    setSettingsOpen(false);
                   }}
                 >
                   <span className="sidebar-icon" aria-hidden="true">

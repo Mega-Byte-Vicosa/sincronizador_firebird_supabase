@@ -1,6 +1,8 @@
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { createSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 
+const BUCKET_MIDIAS_CAMPANHA = "campanha-midias";
+
 async function compararSegredo(recebido: string, esperado: string) {
   const encoder = new TextEncoder();
   const [a, b] = await Promise.all([
@@ -11,6 +13,54 @@ async function compararSegredo(recebido: string, esperado: string) {
   let diferente = aa.length ^ bb.length;
   for (let i = 0; i < Math.max(aa.length, bb.length); i++) diferente |= (aa[i] ?? 0) ^ (bb[i] ?? 0);
   return diferente === 0;
+}
+
+async function listarObjetosRecursivo(
+  supabase: ReturnType<typeof createSupabaseAdmin>,
+  bucket: string,
+  prefixo: string,
+): Promise<string[]> {
+  const acumulado: string[] = [];
+  const pagina = 100;
+
+  async function visitar(caminho: string) {
+    let offset = 0;
+    while (true) {
+      const { data, error } = await supabase.storage.from(bucket).list(caminho, {
+        limit: pagina,
+        offset,
+        sortBy: { column: "name", order: "asc" },
+      });
+      if (error) throw error;
+      const itens = data ?? [];
+      for (const item of itens) {
+        const caminhoItem = `${caminho}/${item.name}`.replace(/^\/+/, "");
+        if (item.id === null) await visitar(caminhoItem);
+        else acumulado.push(caminhoItem);
+      }
+      if (itens.length < pagina) break;
+      offset += pagina;
+    }
+  }
+
+  await visitar(prefixo.replace(/\/+$/, ""));
+  return acumulado;
+}
+
+async function limparStorageEmpresa(supabase: ReturnType<typeof createSupabaseAdmin>, empresaId: string) {
+  const prefixoEmpresa = empresaId.replace(/[^a-fA-F0-9-]/g, "");
+  if (!prefixoEmpresa) return { removidos: 0 };
+  const arquivos = await listarObjetosRecursivo(supabase, BUCKET_MIDIAS_CAMPANHA, prefixoEmpresa);
+  let removidos = 0;
+
+  for (let i = 0; i < arquivos.length; i += 100) {
+    const lote = arquivos.slice(i, i + 100);
+    const { data, error } = await supabase.storage.from(BUCKET_MIDIAS_CAMPANHA).remove(lote);
+    if (error) throw error;
+    removidos += data?.length ?? lote.length;
+  }
+
+  return { removidos };
 }
 
 Deno.serve(async (req) => {
@@ -49,6 +99,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: false, message: "Você não tem permissão para redefinir esta empresa." }, 403);
     }
 
+    const storage = await limparStorageEmpresa(supabase, empresaId);
     const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
     const reset = await supabase.rpc("fn_resetar_empresa_dados", {
       p_empresa_id: empresaId,
@@ -62,8 +113,12 @@ Deno.serve(async (req) => {
     return jsonResponse({
       success: true,
       empresa_id: empresaId,
-      tabelas_limpas: relatorio.tabelas_limpas ?? {},
+      tabelas_limpas: {
+        ...(relatorio.tabelas_limpas ?? {}),
+        storage_campanha_midias: storage.removidos,
+      },
       total_registros_apagados: Number(relatorio.total_registros_apagados ?? 0),
+      storage_arquivos_removidos: storage.removidos,
     });
   } catch (error) {
     const detalhe = error instanceof Error ? error.message : String(error);

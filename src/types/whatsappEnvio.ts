@@ -29,4 +29,7 @@ export interface WhatsappEnvio {
   ultimo_webhook_em?: string | null;
   webhook_ultimo_evento?: unknown | null;
   response_payload?: unknown | null;
+  envio_forcado?: boolean | null;
+  envio_forcado_em?: string | null;
+  envio_forcado_motivo?: string | null;
 }

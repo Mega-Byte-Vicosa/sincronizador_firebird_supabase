@@ -11,6 +11,14 @@ function telefoneNormalizado(valor: unknown) {
   return (digitos.length === 12 || digitos.length === 13) && digitos.startsWith("55") ? digitos : null;
 }
 
+function marcarMensagemComoReenvio(mensagem: string, operacaoEnvio: string, origem: string) {
+  if (operacaoEnvio !== "reenvio") return mensagem;
+  if (!["contas_a_receber", "contas a receber"].includes(origem.toLowerCase())) return mensagem;
+  const texto = mensagem.trimStart();
+  if (texto.toLowerCase().startsWith("*reenvio de cobrança*".toLowerCase())) return mensagem;
+  return `*Reenvio de cobrança*\n\n${mensagem}`;
+}
+
 function mensagemBloqueio(motivo: unknown) {
   const mensagens: Record<string, string> = {
     bloqueado_fora_horario: "Envio bloqueado fora do horário permitido.",
@@ -44,6 +52,7 @@ Deno.serve(async (req) => {
     let mensagem = String(body.mensagem ?? "").trim();
     const tipoEnvio = normalizarTipoEnvio(String(body.categoria_envio || body.tipo_envio || (idCtarec ? "cobranca" : "geral")));
     const operacaoEnvio = String(body.operacao_envio || "envio");
+    const origemEnvio = String(body.origem || (idCtarec ? "Contas a Receber" : "Envio manual"));
     const tentativaAtual = Number(body.tentativa_atual ?? (operacaoEnvio === "reenvio" ? 1 : 0));
     const modeloId = body.modelo_id == null || String(body.modelo_id).trim() === "" ? null : String(body.modelo_id).trim();
     let conta: Record<string, any> | null = null;
@@ -64,11 +73,12 @@ Deno.serve(async (req) => {
     }
     if (!telefone) return jsonResponse({ success: false, motivo: "cancelado_numero_invalido", message: "Telefone inválido ou não informado." }, 400);
     if (!mensagem) return jsonResponse({ success: false, message: "Mensagem não pode estar vazia." }, 400);
+    mensagem = marcarMensagemComoReenvio(mensagem, operacaoEnvio, origemEnvio);
 
     const resultado = await processarEnvioWhatsApp({
       supabase, empresaId, tipoEnvio, clienteId, clienteNome: (conta?.cliente_nome ?? String(body.cliente_nome || "")) || null,
       documento: (conta?.documento ?? String(body.documento || "")) || null, telefone, mensagem,
-      origem: String(body.origem || (idCtarec ? "Contas a Receber" : "Envio manual")),
+      origem: origemEnvio,
       referenciaId: body.referencia_id == null ? idCtarec : String(body.referencia_id), modeloId, tentativaAtual,
       enviarBtzap: async () => {
         const configResult = await supabase.from("tab_btzap_config").select("*").eq("id_empresa", empresaId).eq("ativo", true).maybeSingle();

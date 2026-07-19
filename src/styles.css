@@ -2672,6 +2672,10 @@ button:disabled {
   --summary-card-accent: #0891b2;
 }
 
+.summary-card-cinza {
+  --summary-card-accent: #64748b;
+}
+
 .filters-panel {
   display: grid;
   grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(150px, 1fr));
@@ -3379,6 +3383,26 @@ td:nth-child(4) {
 .whatsapp-status-erro {
   background: #fef2f2;
   color: #b91c1c;
+}
+
+.filters-panel.receivables-filters-panel {
+  grid-template-columns: minmax(360px, 2fr) repeat(3, minmax(190px, 1fr));
+}
+
+.receivables-filter-search {
+  min-width: 0;
+}
+
+@media (max-width: 1100px) {
+  .filters-panel.receivables-filters-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .filters-panel.receivables-filters-panel {
+    grid-template-columns: 1fr;
+  }
 }
 
 .whatsapp-status-pendente {
@@ -4989,6 +5013,20 @@ dd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.forced-send-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin: 0 0 5px;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #9a3412;
+  background: #fff7ed;
+  font-size: 0.68rem;
+  font-weight: 800;
 }
 
 .history-attempts-info {
@@ -8584,11 +8622,11 @@ dd {
 }
 
 .scheduled-summary-grid {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .history-summary-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .history-summary-filter {
@@ -9598,6 +9636,37 @@ dd {
   cursor: pointer;
 }
 
+.campaign-media-preview {
+  display: grid;
+  gap: 8px;
+  max-width: 360px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  padding: 10px;
+  background: #f8fbff;
+}
+
+.campaign-media-preview img,
+.campaign-media-preview video {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  border-radius: 10px;
+  background: #e2e8f0;
+}
+
+.campaign-media-preview small,
+.campaign-media-preview-file span {
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.campaign-media-preview-file {
+  display: grid;
+  gap: 4px;
+}
+
 .campaign-audience-layout {
   display: grid;
   gap: 11px;
@@ -10552,6 +10621,25 @@ dd {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.automation-summary-filter {
+  width: 100%;
+  appearance: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.automation-summary-filter:hover,
+.automation-summary-filter:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 7px 18px rgb(15 23 42 / 10%);
+}
+
+.automation-summary-filter-active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--summary-card-accent) 45%, transparent);
+}
+
 .automations-filter-grid {
   display: grid;
   grid-template-columns: minmax(220px, 1.4fr) minmax(220px, 1.2fr) repeat(4, minmax(145px, 0.8fr));
@@ -10900,7 +10988,7 @@ dd {
 
 .automation-attempt-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -10940,7 +11028,7 @@ dd {
 
 .automation-attempt-item {
   display: grid;
-  grid-template-columns: minmax(170px, 1.4fr) repeat(4, minmax(90px, 0.8fr));
+  grid-template-columns: minmax(170px, 1.4fr) repeat(5, minmax(90px, 0.8fr));
   gap: 10px;
   padding: 12px;
   border-left-width: 4px;
@@ -10956,9 +11044,238 @@ dd {
   font-size: 0.78rem;
 }
 
+.automation-attempt-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  padding: 0 10px;
+  color: #9a3412;
+  background: #fff7ed;
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.automation-attempt-actions button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.automation-attempt-actions svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.force-send-modal {
+  display: grid;
+  gap: 16px;
+  width: min(520px, calc(100vw - 32px));
+  border-radius: 18px;
+  padding: 22px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, .24);
+}
+
+.force-send-modal header,
+.force-send-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.force-send-modal h2 {
+  margin: 0;
+  color: #0f172a;
+}
+
+.force-send-modal p {
+  margin: 0;
+  color: #7f1d1d;
+  line-height: 1.55;
+}
+
+.delete-message-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(15 23 42 / 55%);
+  backdrop-filter: blur(3px);
+}
+
+.delete-message-modal {
+  width: min(520px, 100%);
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 28px 80px rgb(15 23 42 / 30%);
+  animation: delete-message-enter .18s ease-out;
+}
+
+@keyframes delete-message-enter {
+  from { opacity: 0; transform: translateY(10px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.delete-message-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.delete-message-icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid #fecaca;
+  border-radius: 14px;
+  color: #dc2626;
+  background: #fef2f2;
+}
+
+.delete-message-icon svg,
+.delete-message-close svg,
+.delete-message-warning svg,
+.delete-message-actions svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.force-message-confirm-icon {
+  border-color: #fed7aa;
+  color: #ea580c;
+  background: #fff7ed;
+}
+
+.force-message-confirm-eyebrow {
+  color: #c2410c;
+}
+
+.force-message-confirm-warning {
+  border-color: #fecaca;
+  color: #991b1b;
+  background: #fef2f2;
+}
+
+.delete-message-eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: #dc2626;
+  font-size: .7rem;
+  font-weight: 850;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.delete-message-header h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.15rem;
+  line-height: 1.3;
+}
+
+.delete-message-close {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 10px;
+  color: #64748b;
+  background: transparent;
+  cursor: pointer;
+}
+
+.delete-message-close:hover { background: #f1f5f9; }
+
+.delete-message-body {
+  display: grid;
+  gap: 16px;
+  padding: 22px 24px;
+}
+
+.delete-message-body > p {
+  margin: 0;
+  color: #475569;
+  font-size: .94rem;
+  line-height: 1.55;
+}
+
+.delete-message-record {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 13px;
+  padding: 14px 16px;
+  background: #f8fafc;
+}
+
+.delete-message-record span { color: #64748b; font-size: .7rem; font-weight: 800; text-transform: uppercase; }
+.delete-message-record strong { overflow: hidden; color: #0f172a; text-overflow: ellipsis; white-space: nowrap; }
+.delete-message-record small { color: #64748b; }
+
+.delete-message-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid #fed7aa;
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: #9a3412;
+  background: #fff7ed;
+  font-size: .84rem;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.delete-message-warning svg { flex: 0 0 auto; width: 18px; height: 18px; }
+
+.delete-message-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 16px 24px 22px;
+  border-top: 1px solid #f1f5f9;
+  background: #fafafa;
+}
+
+.delete-message-actions button { justify-content: center; min-height: 44px; white-space: nowrap; }
+.delete-message-actions .danger-button { display: inline-flex; align-items: center; gap: 8px; }
+
+@media (max-width: 560px) {
+  .delete-message-backdrop { padding: 12px; }
+  .delete-message-header, .delete-message-body { padding-left: 18px; padding-right: 18px; }
+  .delete-message-actions { grid-template-columns: 1fr; padding: 14px 18px 18px; }
+}
+
+.force-send-icon-button {
+  color: #ea580c !important;
+  border-color: #fed7aa !important;
+  background: #fff7ed !important;
+}
+
 .automation-attempt-pendente { border-left-color: #f59e0b; }
 .automation-attempt-enviado { border-left-color: #10b981; }
 .automation-attempt-erro { border-left-color: #ef4444; }
+.automation-attempt-cancelado { border-left-color: #64748b; }
 
 .campaign-automation-continuous > div {
   display: flex;

@@ -99,8 +99,8 @@ function intervaloMesAtual() {
   };
 }
 
-type StatusVisualMensagemProgramada = "agendada" | "pendente" | "enviada" | "erro";
-type FiltroCardMensagem = "padrao" | "todos" | "PENDENTE" | "AGENDADO" | "ENVIADO" | "ERRO";
+type StatusVisualMensagemProgramada = "agendada" | "pendente" | "enviada" | "cancelada" | "excluida" | "erro";
+type FiltroCardMensagem = "padrao" | "todos" | "PENDENTE" | "AGENDADO" | "ENVIADO" | "CANCELADO" | "ERRO";
 
 const mesAtual = intervaloMesAtual();
 
@@ -331,7 +331,9 @@ function normalizarStatusMensagemProgramada(mensagem: MensagemProgramada): Statu
   const status = normalizarTexto(mensagem.status);
   const motivo = String(mensagem.motivo_pendencia ?? getMotivoBloqueioMensagemProgramada(mensagem)).trim();
 
+  if (!mensagem.ativo) return "excluida";
   if (["enviado", "enviada", "sent", "delivered", "read", "sucesso", "processado"].includes(status)) return "enviada";
+  if (["cancelado", "cancelada", "canceled", "cancelled"].includes(status)) return "cancelada";
   if (motivosErroMensagemProgramada.has(status) || motivosErroMensagemProgramada.has(motivo)) return "erro";
   if (status === "pendente" || motivosPendentesMensagemProgramada.has(motivo)) return "pendente";
   if (["agendado", "agendada", "processando"].includes(status) || dataExecucaoFutura(mensagem)) return "agendada";
@@ -344,12 +346,16 @@ function labelStatusMensagemProgramada(mensagem: MensagemProgramada) {
   if (status === "agendada") return "Agendada";
   if (status === "pendente") return "Pendente";
   if (status === "enviada") return "Enviada";
+  if (status === "cancelada") return "Cancelada";
+  if (status === "excluida") return "Excluída";
   return "Erro";
 }
 
 function getStatusClassProgramada(mensagem: MensagemProgramada) {
   const status = normalizarStatusMensagemProgramada(mensagem);
   if (status === "enviada") return "history-status history-status-enviado";
+  if (status === "cancelada") return "history-status history-status-cancelado";
+  if (status === "excluida") return "history-status history-status-cancelado";
   if (status === "erro") return "history-status history-status-erro";
   if (status === "agendada") return "history-status history-status-enviando";
   return "history-status history-status-pendente";
@@ -358,6 +364,7 @@ function getStatusClassProgramada(mensagem: MensagemProgramada) {
 function getStatusClassFormulario(status: string | null | undefined) {
   const statusNormalizado = normalizarTexto(status);
   if (["enviado", "enviada"].includes(statusNormalizado)) return "history-status history-status-enviado";
+  if (["cancelado", "cancelada"].includes(statusNormalizado)) return "history-status history-status-cancelado";
   if (statusNormalizado === "erro") return "history-status history-status-erro";
   if (["agendado", "agendada", "processando"].includes(statusNormalizado)) return "history-status history-status-enviando";
   return "history-status history-status-pendente";
@@ -399,6 +406,8 @@ function statusVisualParaFiltro(status: StatusVisualMensagemProgramada) {
   if (status === "agendada") return "AGENDADO";
   if (status === "pendente") return "PENDENTE";
   if (status === "enviada") return "ENVIADO";
+  if (status === "cancelada") return "CANCELADO";
+  if (status === "excluida") return "EXCLUIDO";
   return "ERRO";
 }
 
@@ -618,13 +627,19 @@ export function MensagensProgramadas() {
   const [mensagens, setMensagens] = useState<MensagemProgramada[]>([]);
   const [filtros, setFiltros] = useState<FiltrosMensagensProgramadas>(filtrosIniciais);
   const [form, setForm] = useState<FormMensagemProgramada>(() => formInicial());
+  const [statusOriginalEdicao, setStatusOriginalEdicao] = useState<StatusMensagemProgramada | null>(null);
   const [mensagemSelecionada, setMensagemSelecionada] = useState<MensagemProgramada | null>(null);
+  const [mensagemForcarEnvio, setMensagemForcarEnvio] = useState<MensagemProgramada | null>(null);
+  const [mensagemExcluir, setMensagemExcluir] = useState<MensagemProgramada | null>(null);
+  const [mensagemCancelar, setMensagemCancelar] = useState<MensagemProgramada | null>(null);
+  const [mensagemMarcarErro, setMensagemMarcarErro] = useState<MensagemProgramada | null>(null);
   const [exibindoFormulario, setExibindoFormulario] = useState(false);
   const [paginaAtual, setPaginaAtual] = useState(1);
   const [totalRegistros, setTotalRegistros] = useState(0);
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [executando, setExecutando] = useState(false);
+  const [forcandoEnvioId, setForcandoEnvioId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [filtroCard, setFiltroCard] = useState<FiltroCardMensagem>("padrao");
@@ -649,14 +664,15 @@ export function MensagensProgramadas() {
       let consulta = supabase
         .from("tb_msg_programadas")
         .select(MENSAGENS_PROGRAMADAS_SELECT, { count: "exact" })
-        .eq("id_empresa", usuario.id_empresa)
-        .eq("ativo", true);
+        .eq("id_empresa", usuario.id_empresa);
+
+      consulta = consulta.eq("ativo", filtros.status === "EXCLUIDO" ? false : true);
 
       if (filtros.dataInicial) consulta = consulta.gte("executar_em", dataInicioDia(filtros.dataInicial).toISOString());
       if (filtros.dataFinal) consulta = consulta.lt("executar_em", dataDiaSeguinte(filtros.dataFinal).toISOString());
       if (filtros.origemModulo !== "todos") consulta = consulta.eq("origem_modulo", filtros.origemModulo);
       if (filtros.tipoAgendamento !== "todos") consulta = consulta.eq("tipo_agendamento", filtros.tipoAgendamento);
-      if (filtros.status !== "todos") consulta = consulta.eq("status", filtros.status);
+      if (filtros.status !== "todos" && filtros.status !== "EXCLUIDO") consulta = consulta.eq("status", filtros.status);
       if (busca) {
         const filtrosBusca = [
           `titulo.ilike.%${busca}%`,
@@ -707,6 +723,7 @@ export function MensagensProgramadas() {
       pendentes: mensagens.filter((mensagem) => normalizarStatusMensagemProgramada(mensagem) === "pendente").length,
       agendadas: mensagens.filter((mensagem) => normalizarStatusMensagemProgramada(mensagem) === "agendada").length,
       enviadas: mensagens.filter((mensagem) => normalizarStatusMensagemProgramada(mensagem) === "enviada").length,
+      canceladas: mensagens.filter((mensagem) => normalizarStatusMensagemProgramada(mensagem) === "cancelada").length,
       erros: mensagens.filter((mensagem) => normalizarStatusMensagemProgramada(mensagem) === "erro").length,
       total: mensagens.length,
     }),
@@ -714,6 +731,7 @@ export function MensagensProgramadas() {
   );
 
   function editarMensagemProgramada(mensagem: MensagemProgramada) {
+    setStatusOriginalEdicao(mensagem.status);
     setForm({
       id_msg_programada: mensagem.id_msg_programada,
       origem_modulo: mensagem.origem_modulo,
@@ -761,16 +779,71 @@ export function MensagensProgramadas() {
   async function atualizarMensagemProgramada() {
     if (!form.id_msg_programada) return;
     if (!usuario?.id_empresa) throw new Error("Empresa da sessão não identificada.");
+    const mudouParaCancelada = ["CANCELADO", "CANCELADA"].includes(form.status)
+      && !["CANCELADO", "CANCELADA"].includes(statusOriginalEdicao ?? "");
+    const mensagemOriginal = mensagens.find((mensagem) => mensagem.id_msg_programada === form.id_msg_programada);
+    const primeiraTentativaEm = montarExecutarEm(form.data_envio, form.hora_envio);
+    const aindaNaoTentada = Number(mensagemOriginal?.tentativa_atual ?? 0) === 0;
+    const historicoId = mudouParaCancelada && mensagemOriginal
+      ? await criarHistoricoCancelamentoManual(mensagemOriginal)
+      : null;
     const { error } = await supabase
       .from("tb_msg_programadas")
       .update({
         ...montarPayloadMensagemProgramada(form),
         id_empresa: usuario.id_empresa,
+        executar_primeira_tentativa_em: primeiraTentativaEm,
+        ...(aindaNaoTentada ? { proxima_tentativa_em: primeiraTentativaEm } : {}),
+        ...(mudouParaCancelada ? {
+          status: "CANCELADO",
+          enviado: false,
+          erro_envio: "Marcada manualmente como cancelada.",
+          historico_envio_id: historicoId,
+        } : {}),
       })
       .eq("id_empresa", usuario.id_empresa)
       .eq("id_msg_programada", form.id_msg_programada);
     if (error) throw error;
     setFeedback("Mensagem programada atualizada.");
+  }
+
+  async function criarHistoricoCancelamentoManual(mensagem: MensagemProgramada) {
+    if (!usuario?.id_empresa) throw new Error("Empresa da sessão não identificada.");
+    const agora = new Date().toISOString();
+    const tipoEnvio = mensagem.origem_modulo === "CONTA_RECEBER"
+      ? "cobranca"
+      : mensagem.origem_modulo === "CAMPANHA"
+        ? "campanha_promocao"
+        : "mensagem_programada";
+    const { data, error } = await supabase
+      .from("tab_whatsapp_envios")
+      .insert({
+        id_empresa: usuario.id_empresa,
+        cliente_nome: mensagem.destinatario_nome || null,
+        cliente_telefone: mensagem.destinatario_telefone || null,
+        origem: "Mensagem Programada",
+        documento: mensagem.documento_origem || mensagem.id_origem || null,
+        mensagem: mensagem.mensagem || null,
+        status: "cancelado",
+        tipo_envio: tipoEnvio,
+        categoria_envio: tipoEnvio,
+        operacao_envio: "marcado_manual",
+        provider: "manual",
+        erro: "Marcada manualmente como cancelada.",
+        enviado_em: null,
+        processado_em: agora,
+        ultima_tentativa_em: null,
+        proxima_tentativa_em: null,
+        origem_envio: "MENSAGEM_PROGRAMADA",
+        origem_modulo: mensagem.origem_modulo,
+        id_msg_programada: mensagem.id_msg_programada,
+        id_origem: mensagem.id_origem ? String(mensagem.id_origem) : null,
+        modelo_id: mensagem.modelo_id ?? null,
+      })
+      .select("id")
+      .single();
+    if (error) throw error;
+    return data?.id ?? null;
   }
 
   async function salvarMensagemProgramada() {
@@ -801,45 +874,46 @@ export function MensagensProgramadas() {
 
   async function cancelarMensagemProgramada(mensagem: MensagemProgramada) {
     if (mensagem.status === "ENVIADO" || mensagem.status === "ENVIADA") return;
+    if (!usuario?.id_empresa) return setErro("Empresa da sessão não identificada.");
 
-    const { error } = await supabase
-      .from("tb_msg_programadas")
-      .update({ status: "CANCELADO", enviado: false })
-      .eq("id_empresa", usuario?.id_empresa ?? "")
-      .eq("id_msg_programada", mensagem.id_msg_programada);
-
-    if (error) {
-      setErro(error.message);
+    try {
+      const historicoId = await criarHistoricoCancelamentoManual(mensagem);
+      const { error } = await supabase
+        .from("tb_msg_programadas")
+        .update({
+          status: "CANCELADO",
+          enviado: false,
+          erro_envio: "Marcada manualmente como cancelada.",
+          historico_envio_id: historicoId,
+        })
+        .eq("id_empresa", usuario.id_empresa)
+        .eq("id_msg_programada", mensagem.id_msg_programada);
+      if (error) throw error;
+    } catch (error) {
+      setErro(error instanceof Error ? error.message : "Não foi possível cancelar a mensagem programada.");
       return;
     }
 
     setFeedback("Mensagem programada cancelada.");
-    await listarMensagensProgramadas();
-  }
-
-  async function reativarMensagemProgramada(mensagem: MensagemProgramada) {
-    const { error } = await supabase
-      .from("tb_msg_programadas")
-      .update({ status: "AGENDADO", enviado: false, erro_envio: null })
-      .eq("id_empresa", usuario?.id_empresa ?? "")
-      .eq("id_msg_programada", mensagem.id_msg_programada);
-
-    if (error) {
-      setErro(error.message);
-      return;
-    }
-
-    setFeedback("Mensagem programada reativada.");
+    setMensagemCancelar(null);
     await listarMensagensProgramadas();
   }
 
   async function excluirMensagemProgramada(mensagem: MensagemProgramada) {
-    if (mensagem.status === "ENVIADO" || mensagem.status === "ENVIADA") return;
+    if (!usuario?.id_empresa || !usuario.id) {
+      setErro("Usuário ou empresa da sessão não identificados.");
+      return;
+    }
+    const statusVisual = normalizarStatusMensagemProgramada(mensagem);
+    if (!["cancelada", "enviada", "erro"].includes(statusVisual)) {
+      setErro("Cancele ou finalize a mensagem antes de excluí-la.");
+      return;
+    }
 
     const { error } = await supabase
       .from("tb_msg_programadas")
-      .update({ ativo: false })
-      .eq("id_empresa", usuario?.id_empresa ?? "")
+      .update({ ativo: false, excluido_em: new Date().toISOString(), excluido_por: usuario.id })
+      .eq("id_empresa", usuario.id_empresa)
       .eq("id_msg_programada", mensagem.id_msg_programada);
 
     if (error) {
@@ -847,15 +921,66 @@ export function MensagensProgramadas() {
       return;
     }
 
+    setMensagemExcluir(null);
     setFeedback("Mensagem programada removida da listagem.");
     await listarMensagensProgramadas();
   }
 
   async function marcarMensagemComoEnviada(mensagem: MensagemProgramada) {
+    if (!usuario?.id_empresa) {
+      setErro("Empresa da sessão não identificada.");
+      return;
+    }
+
+    const agora = new Date().toISOString();
+    const tipoEnvio = mensagem.origem_modulo === "CONTA_RECEBER"
+      ? "cobranca"
+      : mensagem.origem_modulo === "CAMPANHA"
+        ? "campanha_promocao"
+        : "mensagem_programada";
+    const { data: historico, error: historicoError } = await supabase
+      .from("tab_whatsapp_envios")
+      .insert({
+        id_empresa: usuario.id_empresa,
+        cliente_nome: mensagem.destinatario_nome || null,
+        cliente_telefone: mensagem.destinatario_telefone || null,
+        origem: "Mensagem Programada",
+        documento: mensagem.documento_origem || mensagem.id_origem || null,
+        mensagem: mensagem.mensagem || null,
+        status: "enviado",
+        tipo_envio: tipoEnvio,
+        categoria_envio: tipoEnvio,
+        operacao_envio: "marcado_manual",
+        provider: "manual",
+        erro: "Marcada manualmente como enviada.",
+        enviado_em: agora,
+        processado_em: agora,
+        ultima_tentativa_em: agora,
+        proxima_tentativa_em: null,
+        origem_envio: "MENSAGEM_PROGRAMADA",
+        origem_modulo: mensagem.origem_modulo,
+        id_msg_programada: mensagem.id_msg_programada,
+        id_origem: mensagem.id_origem ? String(mensagem.id_origem) : null,
+        modelo_id: mensagem.modelo_id ?? null,
+      })
+      .select("id")
+      .single();
+
+    if (historicoError) {
+      setErro(historicoError.message);
+      return;
+    }
+
     const { error } = await supabase
       .from("tb_msg_programadas")
-      .update({ status: "ENVIADO", enviado: true, data_hora_envio: new Date().toISOString(), erro_envio: "OK" })
-      .eq("id_empresa", usuario?.id_empresa ?? "")
+      .update({
+        status: "ENVIADO",
+        enviado: true,
+        data_hora_envio: agora,
+        erro_envio: "Marcada manualmente como enviada.",
+        historico_envio_id: historico?.id ?? null,
+      })
+      .eq("id_empresa", usuario.id_empresa)
       .eq("id_msg_programada", mensagem.id_msg_programada);
 
     if (error) {
@@ -868,10 +993,62 @@ export function MensagensProgramadas() {
   }
 
   async function marcarMensagemComErro(mensagem: MensagemProgramada) {
+    if (!usuario?.id_empresa) {
+      setErro("Empresa da sessão não identificada.");
+      return;
+    }
+
+    const agora = new Date().toISOString();
+    const erroManual = "Falha registrada manualmente.";
+    const tipoEnvio = mensagem.origem_modulo === "CONTA_RECEBER"
+      ? "cobranca"
+      : mensagem.origem_modulo === "CAMPANHA"
+        ? "campanha_promocao"
+        : "mensagem_programada";
+    const { data: historico, error: historicoError } = await supabase
+      .from("tab_whatsapp_envios")
+      .insert({
+        id_empresa: usuario.id_empresa,
+        cliente_nome: mensagem.destinatario_nome || null,
+        cliente_telefone: mensagem.destinatario_telefone || null,
+        origem: "Mensagem Programada",
+        documento: mensagem.documento_origem || mensagem.id_origem || null,
+        mensagem: mensagem.mensagem || null,
+        status: "erro",
+        tipo_envio: tipoEnvio,
+        categoria_envio: tipoEnvio,
+        operacao_envio: "marcado_manual",
+        provider: "manual",
+        erro: erroManual,
+        enviado_em: null,
+        processado_em: agora,
+        ultima_tentativa_em: agora,
+        proxima_tentativa_em: null,
+        status_entrega: "FALHOU",
+        falhou_em: agora,
+        origem_envio: "MENSAGEM_PROGRAMADA",
+        origem_modulo: mensagem.origem_modulo,
+        id_msg_programada: mensagem.id_msg_programada,
+        id_origem: mensagem.id_origem ? String(mensagem.id_origem) : null,
+        modelo_id: mensagem.modelo_id ?? null,
+      })
+      .select("id")
+      .single();
+
+    if (historicoError) {
+      setErro(historicoError.message);
+      return;
+    }
+
     const { error } = await supabase
       .from("tb_msg_programadas")
-      .update({ status: "ERRO", enviado: false, erro_envio: "Falha registrada manualmente." })
-      .eq("id_empresa", usuario?.id_empresa ?? "")
+      .update({
+        status: "ERRO",
+        enviado: false,
+        erro_envio: erroManual,
+        historico_envio_id: historico?.id ?? null,
+      })
+      .eq("id_empresa", usuario.id_empresa)
       .eq("id_msg_programada", mensagem.id_msg_programada);
 
     if (error) {
@@ -880,7 +1057,33 @@ export function MensagensProgramadas() {
     }
 
     setFeedback("Mensagem marcada com erro.");
+    setMensagemMarcarErro(null);
     await listarMensagensProgramadas();
+  }
+
+  async function confirmarForcarEnvioMensagemProgramada() {
+    if (!usuario?.id_empresa || !mensagemForcarEnvio) return;
+    setErro(null);
+    setFeedback(null);
+    setForcandoEnvioId(mensagemForcarEnvio.id_msg_programada);
+    try {
+      const { data, error } = await supabase.functions.invoke("btzap-force-send-message", {
+        body: {
+          tipo: "mensagem_programada",
+          id: mensagemForcarEnvio.id_msg_programada,
+          id_empresa: usuario.id_empresa,
+        },
+      });
+      if (error) throw error;
+      if (data?.success === false) throw new Error(data?.message ?? "Não foi possível forçar o envio.");
+      setFeedback(data?.message ?? "Envio forçado executado.");
+      setMensagemForcarEnvio(null);
+      await listarMensagensProgramadas();
+    } catch (error) {
+      setErro(error instanceof Error ? error.message : "Não foi possível forçar o envio.");
+    } finally {
+      setForcandoEnvioId(null);
+    }
   }
 
   const executarMensagensProgramadas = useCallback(
@@ -962,6 +1165,7 @@ export function MensagensProgramadas() {
     { label: "Pendentes", value: resumo.pendentes, icon: "pending", color: "laranja", help: "Aguardando processamento", filtro: "PENDENTE" as const },
     { label: "Agendadas", value: resumo.agendadas, icon: "calendar", color: "azul", help: "Programadas para envio", filtro: "AGENDADO" as const },
     { label: "Enviadas", value: resumo.enviadas, icon: "sent", color: "verde", help: "Concluídas com sucesso", filtro: "ENVIADO" as const },
+    { label: "Canceladas", value: resumo.canceladas, icon: "close", color: "cinza", help: "Envios cancelados", filtro: "CANCELADO" as const },
     { label: "Com erro", value: resumo.erros, icon: "error", color: "vermelho", help: "Precisam de atenção", filtro: "ERRO" as const },
     { label: "Total", value: resumo.total, icon: "list", color: "ciano", help: "Todos os agendamentos", filtro: "todos" as const },
   ];
@@ -1072,6 +1276,8 @@ export function MensagensProgramadas() {
             <option value="AGENDADO">Agendada</option>
             <option value="PENDENTE">Pendente</option>
             <option value="ENVIADO">Enviada</option>
+            <option value="CANCELADO">Cancelada</option>
+            <option value="EXCLUIDO">Excluída</option>
             <option value="ERRO">Erro</option>
           </select>
         </label>
@@ -1201,6 +1407,17 @@ export function MensagensProgramadas() {
                             <ScheduledProgramIcon tipo="info" />
                           </button>
                           <button
+                            className="table-icon-button force-send-icon-button"
+                            type="button"
+                            title="Forçar Envio"
+                            disabled={
+                              !podeEditar || forcandoEnvioId === mensagem.id_msg_programada
+                            }
+                            onClick={() => setMensagemForcarEnvio(mensagemAtual)}
+                          >
+                            <ScheduledProgramIcon tipo="send" />
+                          </button>
+                          <button
                             className="table-icon-button"
                             type="button"
                             title="Editar"
@@ -1213,35 +1430,16 @@ export function MensagensProgramadas() {
                             className="table-icon-button"
                             type="button"
                             title="Cancelar"
-                            disabled={
-                              mensagem.status === "ENVIADO" ||
-                              mensagem.status === "ENVIADA" ||
-                              mensagem.status === "CANCELADO" ||
-                              mensagem.status === "CANCELADA"
-                            }
-                            onClick={() => void cancelarMensagemProgramada(mensagemAtual)}
+                            disabled={!podeEditar}
+                            onClick={() => setMensagemCancelar(mensagemAtual)}
                           >
                             <ScheduledProgramIcon tipo="close" />
                           </button>
                           <button
                             className="table-icon-button"
                             type="button"
-                            title="Reativar"
-                            disabled={mensagem.status !== "CANCELADO" && mensagem.status !== "CANCELADA"}
-                            onClick={() => void reativarMensagemProgramada(mensagemAtual)}
-                          >
-                            <ScheduledProgramIcon tipo="refresh" />
-                          </button>
-                          <button
-                            className="table-icon-button"
-                            type="button"
                             title="Marcar enviada"
-                            disabled={
-                              mensagem.status === "ENVIADO" ||
-                              mensagem.status === "ENVIADA" ||
-                              mensagem.status === "CANCELADO" ||
-                              mensagem.status === "CANCELADA"
-                            }
+                            disabled={!podeEditar}
                             onClick={() => void marcarMensagemComoEnviada(mensagemAtual)}
                           >
                             <ScheduledProgramIcon tipo="check" />
@@ -1250,22 +1448,17 @@ export function MensagensProgramadas() {
                             className="table-icon-button"
                             type="button"
                             title="Marcar erro"
-                            disabled={
-                              mensagem.status === "ENVIADO" ||
-                              mensagem.status === "ENVIADA" ||
-                              mensagem.status === "CANCELADO" ||
-                              mensagem.status === "CANCELADA"
-                            }
-                            onClick={() => void marcarMensagemComErro(mensagemAtual)}
+                            disabled={!podeEditar}
+                            onClick={() => setMensagemMarcarErro(mensagemAtual)}
                           >
                             <ScheduledProgramIcon tipo="alert" />
                           </button>
                           <button
                             className="table-icon-button"
                             type="button"
-                            title="Excluir logicamente"
-                            disabled={mensagem.status === "ENVIADO" || mensagem.status === "ENVIADA"}
-                            onClick={() => void excluirMensagemProgramada(mensagemAtual)}
+                            title={statusVisual === "excluida" ? "Mensagem já excluída" : podeEditar ? "Cancele ou finalize antes de excluir" : "Excluir mensagem programada"}
+                            disabled={podeEditar || statusVisual === "excluida"}
+                            onClick={() => setMensagemExcluir(mensagemAtual)}
                           >
                             <ScheduledProgramIcon tipo="trash" />
                           </button>
@@ -1303,6 +1496,83 @@ export function MensagensProgramadas() {
       </section>
 
       {exibindoFormulario && (
+        <div className="scheduled-program-backdrop" role="presentation" onClick={fecharFormulario}>
+          <section className="scheduled-program-modal" role="dialog" aria-modal="true" aria-labelledby="editar-mensagem-programada-titulo" onClick={(event) => event.stopPropagation()}>
+            <header className="scheduled-program-header">
+              <div className="scheduled-program-title">
+                <span className="scheduled-program-header-icon" aria-hidden="true"><ScheduledProgramIcon tipo="calendar" /></span>
+                <div>
+                  <h2 id="editar-mensagem-programada-titulo">Editar Mensagem Programada</h2>
+                  <p>Atualize a programação existente sem criar um novo agendamento.</p>
+                </div>
+              </div>
+              <button className="scheduled-close-button" type="button" onClick={fecharFormulario} disabled={salvando} aria-label="Fechar"><ScheduledProgramIcon tipo="close" /></button>
+            </header>
+
+            <div className="scheduled-program-body">
+              <section className="scheduled-section-card">
+                <h3><span>1</span> Identificação do registro</h3>
+                <div className="scheduled-account-card">
+                  <strong>{form.titulo || "Mensagem programada"}</strong>
+                  <dl className="scheduled-account-info-grid">
+                    <ScheduledAccountInfo icon="file" label="ID de origem" value={form.id_origem || "-"} />
+                    <ScheduledAccountInfo icon="file" label="Origem" value={formatarModulo(form.origem_modulo)} />
+                    <ScheduledAccountInfo icon="calendar" label="Data programada" value={formatarData(form.data_envio)} />
+                    <ScheduledAccountInfo icon="phone" label="Telefone" value={form.destinatario_telefone || "-"} />
+                  </dl>
+                </div>
+              </section>
+
+              <section className="scheduled-section-card">
+                <h3><span>2</span> Tipo de programação</h3>
+                <div className="scheduled-type-grid">
+                  <button type="button" className={form.tipo_agendamento === "UNICO" ? "scheduled-type-card scheduled-type-card-active" : "scheduled-type-card"} disabled>
+                    <span className="scheduled-radio-dot" /><strong>Única</strong><small>Uma mensagem para uma data e hora.</small>
+                  </button>
+                  <button type="button" className={form.tipo_agendamento === "RECORRENTE" ? "scheduled-type-card scheduled-type-card-active" : "scheduled-type-card"} disabled>
+                    <span className="scheduled-radio-dot" /><strong>Replicada para várias datas</strong><small>O tipo original é preservado durante a edição.</small>
+                  </button>
+                </div>
+              </section>
+
+              <section className="scheduled-section-card scheduled-section-soft">
+                <h3><span>3</span> Configurações do envio</h3>
+                <div className="scheduled-form scheduled-program-grid">
+                  <label><span>Data do envio</span><div className="scheduled-input-icon-wrap"><input type="date" value={form.data_envio} onChange={(event) => setForm({ ...form, data_envio: event.target.value })} disabled={salvando} /><ScheduledProgramIcon tipo="calendar" /></div></label>
+                  <label><span>Horário</span><div className="scheduled-input-icon-wrap"><input type="time" value={form.hora_envio} onChange={(event) => setForm({ ...form, hora_envio: event.target.value })} disabled={salvando} /><ScheduledProgramIcon tipo="clock" /></div></label>
+                  <label><span>Nome do destinatário</span><input value={form.destinatario_nome} onChange={(event) => setForm({ ...form, destinatario_nome: event.target.value })} disabled={salvando} /></label>
+                  <label><span>Telefone do destinatário</span><input value={form.destinatario_telefone} onChange={(event) => setForm({ ...form, destinatario_telefone: event.target.value })} disabled={salvando} /></label>
+                  <label className="scheduled-full-field"><span>Título</span><input value={form.titulo} onChange={(event) => setForm({ ...form, titulo: event.target.value })} disabled={salvando} /></label>
+                  <label className="scheduled-full-field"><span>Mensagem</span><textarea value={form.mensagem} onChange={(event) => setForm({ ...form, mensagem: event.target.value })} disabled={salvando} /></label>
+                </div>
+              </section>
+
+              <section className="scheduled-section-card scheduled-summary-section">
+                <h3><span>4</span> Resumo da programação</h3>
+                <div className="scheduled-program-summary">
+                  <span className="scheduled-summary-icon" aria-hidden="true"><ScheduledProgramIcon tipo="check" /></span>
+                  <div><strong>Enviar em {formatarData(form.data_envio)} às {form.hora_envio || "-"}</strong><p>Destinatário: {form.destinatario_nome || "-"}</p><p>Telefone: {form.destinatario_telefone || "-"} · Origem: {formatarModulo(form.origem_modulo)}</p></div>
+                </div>
+              </section>
+
+              <section className="scheduled-section-card">
+                <h3><span>5</span> Status</h3>
+                <div className="scheduled-status-row">
+                  <label className="scheduled-status-select"><span>Status da programação</span><select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as StatusMensagemProgramada })} disabled={salvando}><option value="PENDENTE">Pendente</option><option value="AGENDADO">Agendado</option><option value="ENVIADO">Enviado</option><option value="CANCELADO">Cancelado</option><option value="ERRO">Erro</option></select></label>
+                  <div className="scheduled-status-help"><span className={getStatusClassFormulario(form.status)}>{form.status === "AGENDADO" ? "Agendado" : form.status === "CANCELADO" ? "Cancelado" : form.status}</span><p>Somente programações com status Agendado serão enviadas automaticamente.</p></div>
+                </div>
+              </section>
+            </div>
+
+            <footer className="scheduled-program-footer">
+              <button className="secondary-button" type="button" onClick={fecharFormulario} disabled={salvando}>Cancelar</button>
+              <button className="primary-button" type="button" onClick={() => void salvarMensagemProgramada()} disabled={salvando}><ScheduledProgramIcon tipo="send" />{salvando ? "Salvando..." : "Salvar alterações"}</button>
+            </footer>
+          </section>
+        </div>
+      )}
+
+      {false && (
         <div className="review-modal-backdrop" role="presentation" onClick={fecharFormulario}>
           <section
             className="review-modal scheduled-form-modal"
@@ -1623,6 +1893,99 @@ export function MensagensProgramadas() {
           </aside>
         </div>
       )}
+
+      {mensagemCancelar && (
+        <div className="delete-message-backdrop" role="presentation" onClick={() => setMensagemCancelar(null)}>
+          <aside className="delete-message-modal" role="alertdialog" aria-modal="true" aria-labelledby="cancelar-mensagem-programada-titulo" onClick={(event) => event.stopPropagation()}>
+            <header className="delete-message-header">
+              <span className="delete-message-icon" aria-hidden="true"><ScheduledProgramIcon tipo="close" /></span>
+              <div><span className="delete-message-eyebrow">Confirmar cancelamento</span><h2 id="cancelar-mensagem-programada-titulo">Cancelar mensagem programada?</h2></div>
+              <button className="delete-message-close" type="button" onClick={() => setMensagemCancelar(null)} aria-label="Fechar"><ScheduledProgramIcon tipo="close" /></button>
+            </header>
+            <div className="delete-message-body">
+              <p>Deseja realmente cancelar esta programação? O envio não será realizado e o cancelamento ficará registrado no histórico.</p>
+              <div className="delete-message-record"><span>Mensagem selecionada</span><strong>{mensagemCancelar.titulo || "Mensagem programada"}</strong><small>{mensagemCancelar.destinatario_nome || "Destinatário não informado"} · {mensagemCancelar.destinatario_telefone || "Telefone não informado"}</small></div>
+              <div className="delete-message-warning"><ScheduledProgramIcon tipo="alert" /><span>Para realizar outro envio depois do cancelamento, será necessário criar uma nova programação.</span></div>
+            </div>
+            <footer className="delete-message-actions">
+              <button className="secondary-button" type="button" onClick={() => setMensagemCancelar(null)}>Não, voltar</button>
+              <button className="danger-button" type="button" onClick={() => void cancelarMensagemProgramada(mensagemCancelar)}><ScheduledProgramIcon tipo="close" />Sim, cancelar</button>
+            </footer>
+          </aside>
+        </div>
+      )}
+
+      {mensagemMarcarErro && (
+        <div className="delete-message-backdrop" role="presentation" onClick={() => setMensagemMarcarErro(null)}>
+          <aside className="delete-message-modal" role="alertdialog" aria-modal="true" aria-labelledby="marcar-erro-mensagem-programada-titulo" onClick={(event) => event.stopPropagation()}>
+            <header className="delete-message-header">
+              <span className="delete-message-icon" aria-hidden="true"><ScheduledProgramIcon tipo="alert" /></span>
+              <div><span className="delete-message-eyebrow">Confirmar alteração</span><h2 id="marcar-erro-mensagem-programada-titulo">Marcar mensagem com erro?</h2></div>
+              <button className="delete-message-close" type="button" onClick={() => setMensagemMarcarErro(null)} aria-label="Fechar"><ScheduledProgramIcon tipo="close" /></button>
+            </header>
+            <div className="delete-message-body">
+              <p>Deseja realmente finalizar esta programação com erro? Essa ação será registrada no histórico de envios.</p>
+              <div className="delete-message-record"><span>Mensagem selecionada</span><strong>{mensagemMarcarErro.titulo || "Mensagem programada"}</strong><small>{mensagemMarcarErro.destinatario_nome || "Destinatário não informado"} · {mensagemMarcarErro.destinatario_telefone || "Telefone não informado"}</small></div>
+              <div className="delete-message-warning"><ScheduledProgramIcon tipo="alert" /><span>Após confirmar, um novo envio dependerá da criação de outra programação.</span></div>
+            </div>
+            <footer className="delete-message-actions">
+              <button className="secondary-button" type="button" onClick={() => setMensagemMarcarErro(null)}>Não, voltar</button>
+              <button className="danger-button" type="button" onClick={() => void marcarMensagemComErro(mensagemMarcarErro)}><ScheduledProgramIcon tipo="alert" />Sim, marcar erro</button>
+            </footer>
+          </aside>
+        </div>
+      )}
+
+      {mensagemExcluir && (
+        <div className="delete-message-backdrop" role="presentation" onClick={() => setMensagemExcluir(null)}>
+          <aside className="delete-message-modal" role="alertdialog" aria-modal="true" aria-labelledby="excluir-mensagem-programada-titulo" aria-describedby="excluir-mensagem-programada-descricao" onClick={(event) => event.stopPropagation()}>
+            <header className="delete-message-header">
+              <span className="delete-message-icon" aria-hidden="true"><ScheduledProgramIcon tipo="trash" /></span>
+              <div>
+                <span className="delete-message-eyebrow">Ação permanente</span>
+                <h2 id="excluir-mensagem-programada-titulo">Excluir mensagem programada?</h2>
+              </div>
+              <button className="delete-message-close" type="button" onClick={() => setMensagemExcluir(null)} aria-label="Fechar"><ScheduledProgramIcon tipo="close" /></button>
+            </header>
+
+            <div className="delete-message-body">
+              <p id="excluir-mensagem-programada-descricao">Esta mensagem será removida da listagem principal e não poderá ser reativada.</p>
+              <div className="delete-message-record">
+                <span>Mensagem selecionada</span>
+                <strong>{mensagemExcluir.titulo || "Mensagem programada"}</strong>
+                <small>{mensagemExcluir.destinatario_nome || "Destinatário não informado"} · {mensagemExcluir.destinatario_telefone || "Telefone não informado"}</small>
+              </div>
+              <div className="delete-message-warning"><ScheduledProgramIcon tipo="alert" /><span>Para realizar outro envio, será necessário criar uma nova programação.</span></div>
+            </div>
+
+            <footer className="delete-message-actions">
+              <button className="secondary-button" type="button" onClick={() => setMensagemExcluir(null)}>Não, cancelar</button>
+              <button className="danger-button" type="button" onClick={() => void excluirMensagemProgramada(mensagemExcluir)}><ScheduledProgramIcon tipo="trash" />Sim, excluir</button>
+            </footer>
+          </aside>
+        </div>
+      )}
+
+      {mensagemForcarEnvio && (
+        <div className="delete-message-backdrop" role="presentation" onClick={forcandoEnvioId ? undefined : () => setMensagemForcarEnvio(null)}>
+          <aside className="delete-message-modal force-message-confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="forcar-envio-mensagem-titulo" onClick={(event) => event.stopPropagation()}>
+            <header className="delete-message-header">
+              <span className="delete-message-icon force-message-confirm-icon" aria-hidden="true"><ScheduledProgramIcon tipo="send" /></span>
+              <div><span className="delete-message-eyebrow force-message-confirm-eyebrow">Atenção à segurança</span><h2 id="forcar-envio-mensagem-titulo">Forçar envio da mensagem?</h2></div>
+              <button className="delete-message-close" type="button" onClick={() => setMensagemForcarEnvio(null)} disabled={Boolean(forcandoEnvioId)} aria-label="Fechar"><ScheduledProgramIcon tipo="close" /></button>
+            </header>
+            <div className="delete-message-body">
+              <p>O envio será executado imediatamente, ignorando os parâmetros de segurança configurados para esta mensagem.</p>
+              <div className="delete-message-record"><span>Mensagem selecionada</span><strong>{mensagemForcarEnvio.titulo || "Mensagem programada"}</strong><small>{mensagemForcarEnvio.destinatario_nome || "Destinatário não informado"} · {mensagemForcarEnvio.destinatario_telefone || "Telefone não informado"}</small></div>
+              <div className="delete-message-warning force-message-confirm-warning"><ScheduledProgramIcon tipo="alert" /><span>Esse procedimento pode causar bloqueio temporário, bloqueio permanente ou banimento do número no WhatsApp.</span></div>
+            </div>
+            <footer className="delete-message-actions">
+              <button className="secondary-button" type="button" onClick={() => setMensagemForcarEnvio(null)} disabled={Boolean(forcandoEnvioId)}>Não, voltar</button>
+              <button className="danger-button" type="button" onClick={() => void confirmarForcarEnvioMensagemProgramada()} disabled={Boolean(forcandoEnvioId)}><ScheduledProgramIcon tipo="send" />{forcandoEnvioId ? "Enviando..." : "Sim, forçar envio"}</button>
+            </footer>
+          </aside>
+        </div>
+      )}
     </main>
   );
 }
@@ -1642,9 +2005,15 @@ function formContaReceberInicial(conta: ContaReceber): FormMensagemProgramada {
     descricao: `Mensagem programada pela tela Contas a Receber para a conta ${conta.id_ctarec}.`,
     destinatario_nome: conta.cliente_nome ?? "",
     destinatario_telefone: conta.cliente_telefone ?? "",
-    mensagem: montarMensagemCobrancaWhatsapp(conta),
+    mensagem: marcarMensagemComoProgramada(montarMensagemCobrancaWhatsapp(conta)),
     status: "AGENDADO",
   };
+}
+
+function marcarMensagemComoProgramada(mensagem: string) {
+  const texto = mensagem.trimStart();
+  if (texto.toLowerCase().startsWith("*mensagem programada*".toLowerCase())) return mensagem;
+  return `*Mensagem programada*\n\n${mensagem}`;
 }
 
 type ScheduledProgramIconType =
@@ -1846,9 +2215,9 @@ export function ProgramarMensagemContaReceberModal({
           setForm((atual) => ({
             ...atual,
             modelo_id: sugestao.id,
-            mensagem: montarMensagemModeloContaReceber(conta, sugestao, {
+            mensagem: marcarMensagemComoProgramada(montarMensagemModeloContaReceber(conta, sugestao, {
               nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
-            }, config),
+            }, config)),
           }));
         }
       })
@@ -1865,9 +2234,9 @@ export function ProgramarMensagemContaReceberModal({
       setForm({ ...form, modelo_id: null });
       return;
     }
-    const mensagem = montarMensagemModeloContaReceber(conta, modelo, {
+    const mensagem = marcarMensagemComoProgramada(montarMensagemModeloContaReceber(conta, modelo, {
       nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
-    }, configModelos);
+    }, configModelos));
     setForm({ ...form, modelo_id: modelo.id, mensagem });
   }
 

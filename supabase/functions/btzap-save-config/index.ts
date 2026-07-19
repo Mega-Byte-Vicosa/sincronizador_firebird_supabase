@@ -16,6 +16,7 @@ Deno.serve(async (req) => {
     const urlServidor = String(payload.url_servidor ?? "").trim();
     const tokenInstancia = String(payload.token_instancia ?? "").trim();
     const endpoint_envio_texto = String(payload.endpoint_envio_texto || "/send/text").trim();
+    const endpoint_envio_media = String(payload.endpoint_envio_media || "/send/media").trim();
     const metodo_envio_texto = String(payload.metodo_envio_texto || "POST").trim().toUpperCase();
     const formato_payload = String(payload.formato_payload || "btzap").trim();
     const ativo = Boolean(payload.ativo);
@@ -44,6 +45,7 @@ Deno.serve(async (req) => {
       nome_instancia: nomeInstancia,
       url_servidor: urlServidor,
       endpoint_envio_texto,
+      endpoint_envio_media,
       metodo_envio_texto,
       formato_payload,
       ativo,

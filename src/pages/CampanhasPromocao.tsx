@@ -77,6 +77,7 @@ interface Campanha {
 }
 
 const ITENS_POR_PAGINA_CAMPANHAS = 100;
+const CAMPANHA_MIDIAS_BUCKET = "campanha-midias";
 
 const CAMPANHAS_SELECT = [
   "id",
@@ -270,6 +271,44 @@ function normalizarHorarioAutomacao(horario: string) {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(horario) ? horario : "";
 }
 
+function nomeArquivoPorUrl(url: string) {
+  try {
+    const pathname = new URL(url).pathname;
+    const nome = decodeURIComponent(pathname.split("/").filter(Boolean).pop() ?? "");
+    return nome || "";
+  } catch {
+    const nome = url.split("?")[0].split("#")[0].split("/").filter(Boolean).pop() ?? "";
+    return nome;
+  }
+}
+
+function tipoArquivoPorUrl(url: string) {
+  const caminho = url.split("?")[0].split("#")[0].toLowerCase();
+  if (/\.(png|jpg|jpeg|webp)$/.test(caminho)) return caminho.endsWith(".png") ? "image/png" : caminho.endsWith(".webp") ? "image/webp" : "image/jpeg";
+  if (/\.mp4$/.test(caminho)) return "video/mp4";
+  return "";
+}
+
+function tipoMidiaCampanha(tipo: string, url: string) {
+  const tipoNormalizado = tipo.toLowerCase();
+  const tipoUrl = tipoArquivoPorUrl(url).toLowerCase();
+  if (tipoNormalizado.startsWith("image/") || tipoUrl.startsWith("image/")) return "image";
+  if (tipoNormalizado.startsWith("video/") || tipoUrl.startsWith("video/")) return "video";
+  return null;
+}
+
+function normalizarNomeArquivoStorage(nome: string) {
+  const partes = nome.split(".");
+  const extensao = partes.length > 1 ? `.${partes.pop()}` : "";
+  const base = partes.join(".") || "arquivo";
+  return `${base
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "arquivo"}${extensao.toLowerCase()}`;
+}
+
 function horarioBancoParaInput(horario: string) {
   return String(horario ?? "").slice(0, 5);
 }
@@ -430,8 +469,9 @@ const mensagemEmailInvalido =
 const mensagemCampanhaBloqueada =
   "O cliente selecionado está configurado para não permitir envio de campanhas, favor confirmar com o cliente e altere as configurações.";
 
-function aplicarVariaveisMensagem(mensagem: string, cliente: ClienteCampanha, form: FormCampanha, config: ConfigModelosMensagem) {
+function aplicarVariaveisMensagem(mensagem: string, cliente: ClienteCampanha, form: FormCampanha, config: ConfigModelosMensagem, nomeEmpresa: string) {
   const nome = cliente.nome ?? "";
+  const empresa = form.empresaDestino.trim() || nomeEmpresa.trim() || "Nossa empresa";
   const dataAtual = new Intl.DateTimeFormat("pt-BR").format(new Date());
   const formatarDataCliente = (value: string | null) => {
     const data = dataValida(value);
@@ -442,9 +482,9 @@ function aplicarVariaveisMensagem(mensagem: string, cliente: ClienteCampanha, fo
     cliente: nome,
     nome_cliente: nome,
     cliente_nome: nome,
-    empresa: form.empresaDestino.trim(),
-    nome_empresa: form.empresaDestino.trim(),
-    empresa_nome: form.empresaDestino.trim(),
+    empresa,
+    nome_empresa: empresa,
+    empresa_nome: empresa,
     aos_cuidados: form.aosCuidados.trim(),
     data_atual: dataAtual,
     documento: String(cliente.id_cliente ?? ""),
@@ -958,6 +998,7 @@ export function CampanhasPromocao() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [modalAberto, setModalAberto] = useState(false);
   const [detalhes, setDetalhes] = useState<Campanha | null>(null);
+  const [campanhaCancelar, setCampanhaCancelar] = useState<Campanha | null>(null);
   const [etapa, setEtapa] = useState(1);
   const [salvando, setSalvando] = useState(false);
   const [tipoComunicacaoAberto, setTipoComunicacaoAberto] = useState(false);
@@ -967,12 +1008,26 @@ export function CampanhasPromocao() {
   const [modelosAtivos, setModelosAtivos] = useState<ModeloMensagemAtivo[]>([]);
   const [modelosCobranca, setModelosCobranca] = useState<ModeloMensagem[]>([]);
   const [configModelos, setConfigModelos] = useState<ConfigModelosMensagem>(CONFIG_MODELOS_PADRAO);
+  const [nomeEmpresa, setNomeEmpresa] = useState("");
   const [modeloSelecionado, setModeloSelecionado] = useState("");
   const [novoHorarioAutomacao, setNovoHorarioAutomacao] = useState("");
+  const [arquivoPreviewLocal, setArquivoPreviewLocal] = useState<string | null>(null);
+  const [arquivoSelecionado, setArquivoSelecionado] = useState<File | null>(null);
+  const [enviandoArquivo, setEnviandoArquivo] = useState(false);
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatusCampanha>("padrao");
   const [filtrosLista, setFiltrosLista] = useState<FiltrosListaCampanhas>(filtrosListaCampanhasIniciais);
   const [paginaAtual, setPaginaAtual] = useState(1);
   const [totalRegistros, setTotalRegistros] = useState(0);
+  const [carregandoResumo, setCarregandoResumo] = useState(true);
+  const [resumoCampanhas, setResumoCampanhas] = useState<Record<StatusCampanha | "total", number>>({
+    total: 0,
+    rascunho: 0,
+    programada: 0,
+    enviando: 0,
+    pausada: 0,
+    concluida: 0,
+    cancelada: 0,
+  });
 
   const gruposModelosAtivos = useMemo(() => {
     const grupos = new Map<string, ModeloMensagemAtivo[]>();
@@ -993,6 +1048,12 @@ export function CampanhasPromocao() {
     );
   }, [modelosAtivos]);
 
+  useEffect(() => {
+    return () => {
+      if (arquivoPreviewLocal?.startsWith("blob:")) URL.revokeObjectURL(arquivoPreviewLocal);
+    };
+  }, [arquivoPreviewLocal]);
+
   const carregarModelosAtivos = useCallback(async () => {
     if (!usuario?.id_empresa) {
       setModelosAtivos([]);
@@ -1000,7 +1061,7 @@ export function CampanhasPromocao() {
       return;
     }
 
-    const [modelosGerais, cobranca, config] = await Promise.allSettled([
+    const [modelosGerais, cobranca, config, empresa] = await Promise.allSettled([
       supabase
         .from("tab_modelos_msg")
         .select("id, modelo_msg_titulo, modelo_msg, modelo_global")
@@ -1010,6 +1071,11 @@ export function CampanhasPromocao() {
         .order("modelo_msg_titulo", { ascending: true }),
       buscarModelosMensagem(usuario.id_empresa),
       buscarConfigModelosMensagem(),
+      supabase
+        .from("tab_empresas")
+        .select("nome_fantasia, razao_social")
+        .eq("id", usuario.id_empresa)
+        .maybeSingle(),
     ]);
 
     if (modelosGerais.status === "fulfilled") {
@@ -1017,6 +1083,9 @@ export function CampanhasPromocao() {
     } else setModelosAtivos([]);
     setModelosCobranca(cobranca.status === "fulfilled" ? cobranca.value : []);
     setConfigModelos(config.status === "fulfilled" ? config.value : CONFIG_MODELOS_PADRAO);
+    if (empresa.status === "fulfilled" && !empresa.value.error) {
+      setNomeEmpresa(String(empresa.value.data?.nome_fantasia || empresa.value.data?.razao_social || "").trim());
+    }
   }, [usuario?.id_empresa]);
 
   const carregarDados = useCallback(async () => {
@@ -1132,9 +1201,55 @@ export function CampanhasPromocao() {
     setCarregando(false);
   }, [filtroStatus, filtrosLista, paginaAtual, usuario?.id_empresa]);
 
+  const carregarResumoCampanhas = useCallback(async () => {
+    if (!usuario?.id_empresa) {
+      setResumoCampanhas({ total: 0, rascunho: 0, programada: 0, enviando: 0, pausada: 0, concluida: 0, cancelada: 0 });
+      setCarregandoResumo(false);
+      return;
+    }
+
+    setCarregandoResumo(true);
+    const consultaBase = () => {
+      let consulta = supabase
+        .from("tab_campanha")
+        .select("id", { count: "exact", head: true })
+        .eq("id_empresa", usuario.id_empresa);
+      if (filtrosLista.busca.trim()) consulta = consulta.ilike("nome", `%${filtrosLista.busca.trim()}%`);
+      if (filtrosLista.tipoComunicacao !== "todos") consulta = consulta.eq("tipo_comunicacao", filtrosLista.tipoComunicacao);
+      if (filtrosLista.dataInicial) consulta = consulta.gte("criado_em", `${filtrosLista.dataInicial}T00:00:00`);
+      if (filtrosLista.dataFinal) {
+        const fim = new Date(`${filtrosLista.dataFinal}T00:00:00`);
+        fim.setDate(fim.getDate() + 1);
+        consulta = consulta.lt("criado_em", fim.toISOString());
+      }
+      return consulta;
+    };
+
+    const status: StatusCampanha[] = ["rascunho", "programada", "enviando", "pausada", "concluida", "cancelada"];
+    const resultados = await Promise.all([consultaBase(), ...status.map((item) => consultaBase().eq("status", item))]);
+    if (resultados.some((resultado) => resultado.error)) {
+      setCarregandoResumo(false);
+      return;
+    }
+    setResumoCampanhas({
+      total: resultados[0].count ?? 0,
+      rascunho: resultados[1].count ?? 0,
+      programada: resultados[2].count ?? 0,
+      enviando: resultados[3].count ?? 0,
+      pausada: resultados[4].count ?? 0,
+      concluida: resultados[5].count ?? 0,
+      cancelada: resultados[6].count ?? 0,
+    });
+    setCarregandoResumo(false);
+  }, [filtrosLista, usuario?.id_empresa]);
+
   useEffect(() => {
     void carregarDados();
   }, [carregarDados]);
+
+  useEffect(() => {
+    void carregarResumoCampanhas();
+  }, [carregarResumoCampanhas]);
 
   useEffect(() => {
     setPaginaAtual(1);
@@ -1165,16 +1280,15 @@ export function CampanhasPromocao() {
   }, [clientes, form.tipoComunicacao, modalAberto]);
 
   const cards = useMemo(() => {
-    const contar = (status: StatusCampanha) => campanhas.filter((campanha) => campanha.status === status).length;
     return [
-      { label: "TOTAL DE CAMPANHAS", value: campanhas.length, help: "Campanhas cadastradas", color: "azul", icon: "list", filtro: "todos" as const },
-      { label: "RASCUNHOS", value: contar("rascunho"), help: "Campanhas em criação", color: "ciano", icon: "pending", filtro: "rascunho" as const },
-      { label: "PROGRAMADAS", value: contar("programada"), help: "Aguardando envio", color: "azul", icon: "calendar", filtro: "programada" as const },
-      { label: "ENVIANDO", value: contar("enviando"), help: "Em andamento", color: "laranja", icon: "sent", filtro: "enviando" as const },
-      { label: "CONCLUÍDAS", value: contar("concluida"), help: "Finalizadas", color: "verde", icon: "sent", filtro: "concluida" as const },
-      { label: "CANCELADAS", value: contar("cancelada"), help: "Canceladas", color: "vermelho", icon: "error", filtro: "cancelada" as const },
+      { label: "RASCUNHOS", value: resumoCampanhas.rascunho, help: "Campanhas em criação", color: "ciano", icon: "pending", filtro: "rascunho" as const },
+      { label: "PROGRAMADAS", value: resumoCampanhas.programada, help: "Aguardando envio", color: "azul", icon: "calendar", filtro: "programada" as const },
+      { label: "ENVIANDO", value: resumoCampanhas.enviando, help: "Em andamento", color: "laranja", icon: "sent", filtro: "enviando" as const },
+      { label: "CONCLUÍDAS", value: resumoCampanhas.concluida, help: "Finalizadas", color: "verde", icon: "sent", filtro: "concluida" as const },
+      { label: "CANCELADAS", value: resumoCampanhas.cancelada, help: "Canceladas", color: "vermelho", icon: "error", filtro: "cancelada" as const },
+      { label: "TOTAL DE CAMPANHAS", value: resumoCampanhas.total, help: "Campanhas cadastradas", color: "azul", icon: "list", filtro: "todos" as const },
     ];
-  }, [campanhas]);
+  }, [resumoCampanhas]);
 
   const campanhasExibidas = useMemo(() => {
     const busca = normalizarBusca(filtrosLista.busca);
@@ -1239,9 +1353,12 @@ export function CampanhasPromocao() {
     clienteAptoParaCanal(cliente, form.tipoComunicacao),
   );
   const ignoradosSelecionados = Math.max(0, clientesSelecionados.length - aptosSelecionados.length);
+  const previewArquivoUrl = form.arquivoUrl.trim() || arquivoPreviewLocal || "";
+  const previewArquivoTipo = form.arquivoUrl.trim() ? tipoArquivoPorUrl(form.arquivoUrl) || form.arquivoTipo : form.arquivoTipo;
+  const previewMidia = tipoMidiaCampanha(previewArquivoTipo, previewArquivoUrl);
 
   function abrirNovaCampanha() {
-    setForm({ ...formInicial, dataHoraAgendamento: "" });
+    setForm({ ...formInicial, dataHoraAgendamento: "", empresaDestino: nomeEmpresa });
     setNovoHorarioAutomacao("");
     setSelecionados(new Set());
     setEtapa(1);
@@ -1250,6 +1367,8 @@ export function CampanhasPromocao() {
     setAvisoPublico(null);
     setErro(null);
     setModeloSelecionado("");
+    setArquivoPreviewLocal(null);
+    setArquivoSelecionado(null);
     void carregarModelosAtivos();
   }
 
@@ -1261,7 +1380,7 @@ export function CampanhasPromocao() {
       publicoAlvo: campanha.publico_alvo ?? "Todos os clientes",
       tipoComunicacao: campanha.tipo_comunicacao,
       aosCuidados: campanha.aos_cuidados ?? "",
-      empresaDestino: campanha.empresa_destino ?? "",
+      empresaDestino: campanha.empresa_destino ?? nomeEmpresa,
       automatizada: campanha.automatizada,
       tipoAutomacao: normalizarTipoAutomacao(campanha.tipo_automacao),
       automacaoDiasAntesVencimento: campanha.automacao_dias_antes_vencimento === null ? "" : String(campanha.automacao_dias_antes_vencimento),
@@ -1294,6 +1413,8 @@ export function CampanhasPromocao() {
     setAvisoPublico(null);
     setModeloSelecionado("");
     setNovoHorarioAutomacao("");
+    setArquivoPreviewLocal(null);
+    setArquivoSelecionado(null);
     void carregarModelosAtivos();
   }
 
@@ -1334,15 +1455,26 @@ export function CampanhasPromocao() {
     setAvisoPublico(null);
     setModeloSelecionado("");
     setNovoHorarioAutomacao("");
+    setArquivoPreviewLocal(null);
+    setArquivoSelecionado(null);
     void carregarModelosAtivos();
   }
 
   async function atualizarStatus(campanha: Campanha, status: StatusCampanha) {
-    const { error } = await supabase
-      .from("tab_campanha")
-      .update({ status })
-      .eq("id_empresa", usuario?.id_empresa)
-      .eq("id", campanha.id);
+    if (!usuario?.id_empresa) {
+      setErro("Empresa da sessão não identificada.");
+      return;
+    }
+    const { error } = status === "cancelada"
+      ? await supabase.rpc("fn_cancelar_campanha", {
+          p_id_empresa: usuario.id_empresa,
+          p_id_campanha: campanha.id,
+        })
+      : await supabase
+          .from("tab_campanha")
+          .update({ status })
+          .eq("id_empresa", usuario.id_empresa)
+          .eq("id", campanha.id);
 
     if (error) {
       setErro("Não foi possível atualizar o status da campanha.");
@@ -1350,7 +1482,9 @@ export function CampanhasPromocao() {
     }
 
     setFeedback("Status da campanha atualizado.");
+    if (status === "cancelada") setCampanhaCancelar(null);
     await carregarDados();
+    await carregarResumoCampanhas();
   }
 
   function alternarCliente(cliente: ClienteCampanha) {
@@ -1451,10 +1585,85 @@ export function CampanhasPromocao() {
     setAvisoPublico(null);
   }
 
-  function selecionarArquivo(event: ChangeEvent<HTMLInputElement>) {
+  async function selecionarArquivo(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    setForm({ ...form, arquivoNome: file.name, arquivoTipo: file.type || "application/octet-stream", arquivoUrl: "" });
+    const permitePreview = file.type.startsWith("image/") || file.type.startsWith("video/");
+    if (!permitePreview) {
+      setErro("Selecione uma imagem ou vídeo compatível com o envio da campanha.");
+      event.target.value = "";
+      return;
+    }
+    setArquivoSelecionado(file);
+    setArquivoPreviewLocal(permitePreview ? URL.createObjectURL(file) : null);
+    setForm((atual) => ({ ...atual, arquivoNome: file.name, arquivoTipo: file.type || "application/octet-stream", arquivoUrl: "" }));
+    setEnviandoArquivo(true);
+    setErro(null);
+
+    try {
+      if (!usuario?.id_empresa) throw new Error("Empresa da sessão não identificada.");
+      const nomeArquivo = normalizarNomeArquivoStorage(file.name);
+      const caminho = `${usuario.id_empresa}/${Date.now()}-${crypto.randomUUID()}-${nomeArquivo}`;
+      const { error: uploadError } = await supabase.storage
+        .from(CAMPANHA_MIDIAS_BUCKET)
+        .upload(caminho, file, {
+          cacheControl: "3600",
+          upsert: false,
+          contentType: file.type || "application/octet-stream",
+        });
+      if (uploadError) throw new Error(`Não foi possível enviar o arquivo para o Storage: ${uploadError.message}`);
+      const { data } = supabase.storage.from(CAMPANHA_MIDIAS_BUCKET).getPublicUrl(caminho);
+      if (!data.publicUrl) throw new Error("Não foi possível gerar a URL pública do arquivo.");
+      setForm((atual) => ({ ...atual, arquivoUrl: data.publicUrl, arquivoNome: file.name, arquivoTipo: file.type || "application/octet-stream" }));
+      setArquivoSelecionado(null);
+    } catch (error) {
+      setErro(error instanceof Error ? error.message : "Não foi possível enviar o arquivo da campanha.");
+    } finally {
+      setEnviandoArquivo(false);
+    }
+  }
+
+  function alterarArquivoUrl(url: string) {
+    const tipoDetectado = tipoArquivoPorUrl(url);
+    const nomeDetectado = nomeArquivoPorUrl(url);
+    setArquivoSelecionado(null);
+    setForm({
+      ...form,
+      arquivoUrl: url,
+      arquivoTipo: tipoDetectado || form.arquivoTipo,
+      arquivoNome: nomeDetectado || form.arquivoNome,
+    });
+  }
+
+  async function uploadArquivoCampanha() {
+    if (!arquivoSelecionado || !usuario?.id_empresa) {
+      return {
+        arquivoUrl: form.arquivoUrl.trim(),
+        arquivoNome: form.arquivoNome.trim(),
+        arquivoTipo: form.arquivoTipo.trim(),
+      };
+    }
+
+    const nomeArquivo = normalizarNomeArquivoStorage(arquivoSelecionado.name);
+    const caminho = `${usuario.id_empresa}/${Date.now()}-${crypto.randomUUID()}-${nomeArquivo}`;
+    const { error: uploadError } = await supabase.storage
+      .from(CAMPANHA_MIDIAS_BUCKET)
+      .upload(caminho, arquivoSelecionado, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: arquivoSelecionado.type || "application/octet-stream",
+      });
+
+    if (uploadError) throw new Error(`Não foi possível enviar o arquivo para o Storage: ${uploadError.message}`);
+
+    const { data } = supabase.storage.from(CAMPANHA_MIDIAS_BUCKET).getPublicUrl(caminho);
+    if (!data.publicUrl) throw new Error("Não foi possível gerar a URL pública do arquivo.");
+
+    return {
+      arquivoUrl: data.publicUrl,
+      arquivoNome: arquivoSelecionado.name,
+      arquivoTipo: arquivoSelecionado.type || "application/octet-stream",
+    };
   }
 
   function aplicarModeloMensagem(idModelo: string) {
@@ -1475,6 +1684,86 @@ export function CampanhasPromocao() {
 
     setModeloSelecionado(idModelo);
     setForm({ ...form, mensagem: modeloCobranca?.corpo ?? modelo?.modelo_msg ?? form.mensagem });
+  }
+
+  function selecionarTipoAutomacaoComSugestao(tipoAutomacao: string) {
+    const proximoForm: FormCampanha = {
+      ...form,
+      tipoAutomacao,
+      automacaoDiasAntesVencimento: tipoAutomacao === "contas_a_vencer_dias" ? form.automacaoDiasAntesVencimento : "",
+      automacaoDiasSemCompra: tipoAutomacao === "clientes_sem_comprar_dias" ? form.automacaoDiasSemCompra : "",
+      automacaoDiasPosCompra: tipoAutomacao === "pos_compra_dias" ? form.automacaoDiasPosCompra : "",
+    };
+
+    if (!tipoAutomacao || form.id) {
+      setForm(proximoForm);
+      return;
+    }
+
+    const tipo = normalizarTipoAutomacao(tipoAutomacao);
+    const candidatos: Array<{ id: string; mensagem: string }> = [];
+    const categoriaCobranca = tipo === "contas_vencidas_com_carencia"
+      ? "contas_receber_carencia"
+      : tipo === "contas_vencidas"
+        ? "contas_receber_vencida"
+        : isAutomacaoCobranca(tipo)
+          ? "contas_receber_a_vencer"
+          : null;
+
+    if (categoriaCobranca) {
+      modelosCobranca
+        .filter((modelo) => modelo.categoria === categoriaCobranca)
+        .forEach((modelo) => candidatos.push({ id: `cobranca:${modelo.id}`, mensagem: modelo.corpo }));
+    } else {
+      const palavrasPorTipo: Record<string, string[]> = {
+        aniversariantes_mes: ["anivers", "parabens", "feliz aniversario"],
+        aniversariantes_dia: ["anivers", "parabens", "feliz aniversario"],
+        clientes_sem_comprar_dias: ["sem comprar", "inativ", "saudade", "sentimos sua falta", "volte"],
+        pos_compra_dias: ["pos compra", "pos-compra", "agradec", "obrigado pela compra", "satisfacao"],
+      };
+      const palavras = palavrasPorTipo[tipo] ?? [];
+      modelosAtivos
+        .filter((modelo) => {
+          const conteudo = normalizarBusca(`${modelo.modelo_msg_titulo} ${modelo.modelo_msg}`);
+          return palavras.some((palavra) => conteudo.includes(normalizarBusca(palavra)));
+        })
+        .forEach((modelo) => candidatos.push({ id: modelo.id, mensagem: modelo.modelo_msg }));
+    }
+
+    const mensagensFallback: Record<string, string[]> = {
+      aniversariantes_mes: [
+        "Olá, {{nome}}! Seu mês especial chegou! Desejamos muitas felicidades e preparamos uma surpresa para celebrar com você.",
+        "Parabéns pelo seu mês, {{nome}}! Que este novo ciclo seja repleto de alegrias. Conte sempre com a {{empresa}}.",
+      ],
+      aniversariantes_dia: [
+        "Feliz aniversário, {{nome}}! Desejamos um dia incrível e um novo ciclo cheio de realizações. Um abraço da equipe {{empresa}}!",
+        "Parabéns, {{nome}}! Hoje é seu dia e a {{empresa}} deseja muita saúde, felicidade e sucesso para você.",
+      ],
+      clientes_sem_comprar_dias: [
+        "Olá, {{nome}}! Sentimos sua falta por aqui. Temos novidades esperando por você na {{empresa}}. Vamos conversar?",
+        "Oi, {{nome}}! Faz algum tempo desde sua última visita. Que tal conhecer as novidades que preparamos para você?",
+      ],
+      pos_compra_dias: [
+        "Olá, {{nome}}! Agradecemos pela sua compra. Esperamos que tenha gostado e estamos à disposição sempre que precisar.",
+        "Oi, {{nome}}! Passando para agradecer pela confiança na {{empresa}}. Sua satisfação é muito importante para nós!",
+      ],
+      contas_a_vencer_dias: ["Olá, {{cliente}}! Lembramos que o documento {{documento}}, no valor de {{valor}}, vence em {{vencimento}}."],
+      contas_vencendo_hoje: ["Olá, {{cliente}}! O documento {{documento}}, no valor de {{valor}}, vence hoje. Se já realizou o pagamento, desconsidere."],
+      contas_vencidas_com_carencia: ["Olá, {{cliente}}! O documento {{documento}} está no período de carência. Entre em contato conosco se precisar de ajuda."],
+      contas_vencidas: ["Olá, {{cliente}}! Identificamos que o documento {{documento}}, no valor de {{valor}}, está vencido. Entre em contato para regularização."],
+    };
+
+    if (candidatos.length > 0) {
+      const selecionado = candidatos[Math.floor(Math.random() * candidatos.length)];
+      setModeloSelecionado(selecionado.id);
+      setForm({ ...proximoForm, mensagem: selecionado.mensagem });
+      return;
+    }
+
+    const alternativas = mensagensFallback[tipo] ?? [];
+    const mensagem = alternativas[Math.floor(Math.random() * alternativas.length)] ?? proximoForm.mensagem;
+    setModeloSelecionado("");
+    setForm({ ...proximoForm, mensagem });
   }
 
   function alternarItemAgenda(campo: "automacaoDiasSemana" | "automacaoMeses", valor: number) {
@@ -1535,6 +1824,9 @@ export function CampanhasPromocao() {
       return "Selecione ao menos um mês de execução.";
     }
     if (!form.mensagem.trim()) return "Informe a mensagem da campanha.";
+    if ((form.arquivoUrl.trim() || arquivoSelecionado) && !tipoMidiaCampanha(form.arquivoTipo, form.arquivoUrl || form.arquivoNome)) {
+      return "Nesta primeira etapa, o envio de arquivo em campanha aceita imagem ou video por URL publica.";
+    }
     if (status === "programada" && !form.dataHoraAgendamento) return "Informe data e hora de agendamento.";
     if (form.automatizada && !form.campanhaContinua) {
       if (!form.terminaEm) return "Informe quando a campanha automatizada termina ou marque Campanha contínua.";
@@ -1549,6 +1841,10 @@ export function CampanhasPromocao() {
   }
 
   async function salvarCampanha(status: StatusCampanha) {
+    if (enviandoArquivo) {
+      setErro("Aguarde o envio da imagem antes de salvar a campanha.");
+      return;
+    }
     const erroValidacao = validarFormulario(status);
     if (erroValidacao) {
       setErro(erroValidacao);
@@ -1565,6 +1861,15 @@ export function CampanhasPromocao() {
 
     const clientesParaSalvar = form.automatizada ? [] : aptosSelecionados;
     const aptos = clientesParaSalvar.filter((cliente) => clienteAptoParaCanal(cliente, form.tipoComunicacao));
+    let arquivoFinal: { arquivoUrl: string; arquivoNome: string; arquivoTipo: string };
+
+    try {
+      arquivoFinal = await uploadArquivoCampanha();
+    } catch (error) {
+      setErro(error instanceof Error ? error.message : "Não foi possível enviar o arquivo da campanha.");
+      setSalvando(false);
+      return;
+    }
 
     const campanhaPayload = {
       id_empresa: usuario.id_empresa,
@@ -1617,9 +1922,9 @@ export function CampanhasPromocao() {
         : "inativa",
       data_hora_agendamento: form.dataHoraAgendamento ? new Date(form.dataHoraAgendamento).toISOString() : null,
       intervalo_envio_segundos: Number(form.intervaloEnvioSegundos) || 30,
-      arquivo_url: form.arquivoUrl || null,
-      arquivo_nome: form.arquivoNome || null,
-      arquivo_tipo: form.arquivoTipo || null,
+      arquivo_url: arquivoFinal.arquivoUrl || null,
+      arquivo_nome: arquivoFinal.arquivoNome || null,
+      arquivo_tipo: arquivoFinal.arquivoTipo || null,
       aos_cuidados: form.aosCuidados.trim() || null,
       empresa_destino: form.empresaDestino.trim() || null,
       observacoes: form.observacoes.trim() || null,
@@ -1705,6 +2010,7 @@ export function CampanhasPromocao() {
         setModalAberto(false);
         setSalvando(false);
         await carregarDados();
+        await carregarResumoCampanhas();
         return;
       }
 
@@ -1726,7 +2032,7 @@ export function CampanhasPromocao() {
             descricao: campanhaSalva.objetivo,
             destinatario_nome: cliente.nome,
             destinatario_telefone: telefone,
-            mensagem: aplicarVariaveisMensagem(form.mensagem.trim(), cliente, form, configModelos),
+            mensagem: aplicarVariaveisMensagem(form.mensagem.trim(), cliente, form, configModelos, nomeEmpresa),
             tipo_agendamento: "UNICO",
             data_envio: dataEnvio,
             hora_envio: horaEnvio,
@@ -1769,13 +2075,14 @@ export function CampanhasPromocao() {
     setModalAberto(false);
     setSalvando(false);
     await carregarDados();
+    await carregarResumoCampanhas();
   }
 
   return (
     <main className="page-shell campaigns-page">
       <GlobalPageHeader title="Campanhas/Promoções" subtitle="Crie, programe e acompanhe campanhas para seus clientes." icon="megaphone" actions={
         <>
-          <button className="secondary-button" type="button" onClick={carregarDados} disabled={carregando}>
+          <button className="secondary-button" type="button" onClick={() => { void carregarDados(); void carregarResumoCampanhas(); }} disabled={carregando || carregandoResumo}>
             Atualizar
           </button>
           <button className="primary-button" type="button" onClick={abrirNovaCampanha}>
@@ -1796,11 +2103,14 @@ export function CampanhasPromocao() {
             type="button"
             key={card.label}
             aria-pressed={ativo}
-            onClick={() => setFiltroStatus(card.filtro)}
+            onClick={() => {
+              setFiltroStatus(card.filtro);
+              setFiltrosLista((atuais) => ({ ...atuais, dataInicial: "", dataFinal: "" }));
+            }}
           >
             <div>
               <span>{card.label}</span>
-              <strong>{carregando ? "..." : card.value}</strong>
+              <strong>{carregandoResumo ? "..." : card.value}</strong>
               <small>{card.help}</small>
             </div>
             <div className="summary-card-icon" aria-hidden="true">
@@ -1874,25 +2184,6 @@ export function CampanhasPromocao() {
         <div className="section-title">
           <h2>Campanhas cadastradas</h2>
           <span>{totalRegistros} campanha(s)</span>
-          <div className="table-pagination">
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={carregando || paginaAtual <= 1}
-              onClick={() => setPaginaAtual((pagina) => Math.max(1, pagina - 1))}
-            >
-              Anterior
-            </button>
-            <span>Página {paginaAtual} de {totalPaginas}</span>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={carregando || paginaAtual >= totalPaginas}
-              onClick={() => setPaginaAtual((pagina) => Math.min(totalPaginas, pagina + 1))}
-            >
-              Próxima
-            </button>
-          </div>
         </div>
 
         {carregando && <div className="state-box">Carregando campanhas...</div>}
@@ -1977,7 +2268,7 @@ export function CampanhasPromocao() {
                           type="button"
                           title="Cancelar"
                           disabled={["cancelada", "concluida"].includes(campanha.status)}
-                          onClick={() => void atualizarStatus(campanha, "cancelada")}
+                          onClick={() => setCampanhaCancelar(campanha)}
                         >
                           <CampaignModalIcon name="close" />
                         </button>
@@ -1992,6 +2283,28 @@ export function CampanhasPromocao() {
               </tbody>
             </table>
           </div>
+        )}
+
+        {totalRegistros > 0 && (
+          <nav className="receivables-pagination" aria-label="Paginação de campanhas">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={carregando || paginaAtual <= 1}
+              onClick={() => setPaginaAtual((pagina) => Math.max(1, pagina - 1))}
+            >
+              Anterior
+            </button>
+            <span>Página <strong>{paginaAtual}</strong> de <strong>{totalPaginas}</strong></span>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={carregando || paginaAtual >= totalPaginas}
+              onClick={() => setPaginaAtual((pagina) => Math.min(totalPaginas, pagina + 1))}
+            >
+              Próxima
+            </button>
+          </nav>
         )}
       </section>
 
@@ -2129,13 +2442,7 @@ export function CampanhasPromocao() {
                       <span>Tipo de automação</span>
                       <select
                         value={form.tipoAutomacao}
-                        onChange={(event) => setForm({
-                          ...form,
-                          tipoAutomacao: event.target.value,
-                          automacaoDiasAntesVencimento: event.target.value === "contas_a_vencer_dias" ? form.automacaoDiasAntesVencimento : "",
-                          automacaoDiasSemCompra: event.target.value === "clientes_sem_comprar_dias" ? form.automacaoDiasSemCompra : "",
-                          automacaoDiasPosCompra: event.target.value === "pos_compra_dias" ? form.automacaoDiasPosCompra : "",
-                        })}
+                        onChange={(event) => selecionarTipoAutomacaoComSugestao(event.target.value)}
                       >
                         <option value="">Selecione</option>
                         {tiposAutomacao.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
@@ -2442,12 +2749,45 @@ export function CampanhasPromocao() {
                   )}
                   <label className="campaign-upload-field">
                     <span>Arquivo ou imagem</span>
-                    <input type="file" onChange={selecionarArquivo} disabled={salvando} />
+                    <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4" onChange={(event) => void selecionarArquivo(event)} disabled={salvando || enviandoArquivo} />
+                    {enviandoArquivo && <small className="field-help">Enviando arquivo para o Storage...</small>}
                   </label>
                   <label>
                     <span>Arquivo selecionado</span>
                     <input value={form.arquivoNome || "-"} readOnly />
                   </label>
+                  <label className="campaign-full-field">
+                    <span>URL pública do arquivo</span>
+                    <input
+                      value={form.arquivoUrl}
+                      onChange={(event) => alterarArquivoUrl(event.target.value)}
+                      placeholder="https://exemplo.com/arquivo.jpg"
+                      disabled={salvando}
+                    />
+                    <small className="field-help">
+                      Ao selecionar um arquivo local, ele será enviado ao Storage e a URL pública será salva automaticamente para envio pelo BTZap.
+                    </small>
+                  </label>
+                  {(previewArquivoUrl || form.arquivoNome) && (
+                    <div className="campaign-media-preview campaign-full-field">
+                      {previewMidia === "image" && previewArquivoUrl ? (
+                        <img src={previewArquivoUrl} alt="Prévia do arquivo da campanha" />
+                      ) : previewMidia === "video" && previewArquivoUrl ? (
+                        <video src={previewArquivoUrl} controls />
+                      ) : (
+                        <div className="campaign-media-preview-file">
+                          <strong>{form.arquivoNome || "Arquivo selecionado"}</strong>
+                          <span>{form.arquivoTipo || "Tipo não identificado"}</span>
+                        </div>
+                      )}
+                      {arquivoPreviewLocal && !form.arquivoUrl.trim() && (
+                        <small>Este arquivo será enviado ao Storage ao salvar a campanha.</small>
+                      )}
+                      {form.arquivoUrl.trim() && (
+                        <small>Arquivo enviado e vinculado à campanha.</small>
+                      )}
+                    </div>
+                  )}
                   <label className="campaign-full-field">
                     <span>Observações</span>
                     <textarea value={form.observacoes} onChange={(event) => setForm({ ...form, observacoes: event.target.value })} />
@@ -2612,6 +2952,31 @@ export function CampanhasPromocao() {
               )}
             </footer>
           </section>
+        </div>
+      )}
+
+      {campanhaCancelar && (
+        <div className="delete-message-backdrop" role="presentation" onClick={() => setCampanhaCancelar(null)}>
+          <aside className="delete-message-modal" role="alertdialog" aria-modal="true" aria-labelledby="cancelar-campanha-titulo" onClick={(event) => event.stopPropagation()}>
+            <header className="delete-message-header">
+              <span className="delete-message-icon" aria-hidden="true"><CampaignModalIcon name="close" /></span>
+              <div><span className="delete-message-eyebrow">Confirmar cancelamento</span><h2 id="cancelar-campanha-titulo">Cancelar campanha?</h2></div>
+              <button className="delete-message-close" type="button" onClick={() => setCampanhaCancelar(null)} aria-label="Fechar"><CampaignModalIcon name="close" /></button>
+            </header>
+            <div className="delete-message-body">
+              <p>Deseja realmente cancelar esta campanha? Os envios pendentes vinculados a ela não deverão continuar sendo processados.</p>
+              <div className="delete-message-record">
+                <span>Campanha selecionada</span>
+                <strong>{campanhaCancelar.nome || "Campanha sem nome"}</strong>
+                <small>{tipoLabel(campanhaCancelar.tipo_comunicacao)} · {campanhaCancelar.total_destinatarios} destinatário(s) · Status: {statusLabels[campanhaCancelar.status]}</small>
+              </div>
+              <div className="delete-message-warning"><CampaignModalIcon name="megaphone" /><span>O cancelamento encerra esta programação. Para um novo envio, será necessário criar ou duplicar uma campanha.</span></div>
+            </div>
+            <footer className="delete-message-actions">
+              <button className="secondary-button" type="button" onClick={() => setCampanhaCancelar(null)}>Não, voltar</button>
+              <button className="danger-button" type="button" onClick={() => void atualizarStatus(campanhaCancelar, "cancelada")}><CampaignModalIcon name="close" />Sim, cancelar</button>
+            </footer>
+          </aside>
         </div>
       )}
 

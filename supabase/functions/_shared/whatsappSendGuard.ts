@@ -17,7 +17,12 @@ export interface ProcessarEnvioArgs {
   referenciaId?: string | number | null;
   modeloId?: string | null;
   tentativaAtual?: number;
+  quantidadeMensagens?: number;
   enviarBtzap: () => Promise<unknown>;
+}
+
+interface RetornoEnviosMultiplos {
+  envios: Array<{ mensagem: string; retorno: unknown }>;
 }
 
 const TIPOS = new Set<TipoEnvioWhats>(["geral", "cobranca", "campanha_promocao", "aniversario", "mensagem_programada"]);
@@ -141,6 +146,7 @@ export function calcularProximaTentativa(parametro: any, tentativaAtual = 0) {
 
 export async function validarParametrosEnvioWhats(args: Omit<ProcessarEnvioArgs, "enviarBtzap">) {
   const { supabase, empresaId, telefone, clienteId, tentativaAtual = 0 } = args;
+  const quantidadeMensagens = Math.max(1, Math.floor(Number(args.quantidadeMensagens) || 1));
   const tipo = normalizarTipoEnvio(args.tipoEnvio);
   const parametro = await buscarParametroWhats(supabase, empresaId, tipo);
   if (!parametro) return { podeEnviar: false, motivo: "falha_sem_parametro_whats", proximaTentativaEm: null };
@@ -180,9 +186,9 @@ export async function validarParametrosEnvioWhats(args: Omit<ProcessarEnvioArgs,
   const base = () => supabase.from("tab_whatsapp_envios").select("id", { count: "exact", head: true }).eq("id_empresa", empresaId).eq("status", "enviado");
   const [porMinuto, porDia] = await Promise.all([base().gte("processado_em", minuto.toISOString()), base().gte("processado_em", inicioDia)]);
   if (porMinuto.error) throw porMinuto.error; if (porDia.error) throw porDia.error;
-  if ((porMinuto.count ?? 0) >= Number(parametro.max_mensagens_por_minuto)) return { podeEnviar: false, motivo: "bloqueado_limite_minuto", parametro, parametroId: parametro.id, proximaTentativaEm: depoisDe(60) };
+  if ((porMinuto.count ?? 0) + quantidadeMensagens > Number(parametro.max_mensagens_por_minuto)) return { podeEnviar: false, motivo: "bloqueado_limite_minuto", detalhe: `O envio requer ${quantidadeMensagens} vagas disponíveis.`, parametro, parametroId: parametro.id, proximaTentativaEm: depoisDe(60) };
   const limiteDia = Number(parametro.usar_limite_estavel ? parametro.max_mensagens_por_dia_estavel : parametro.max_mensagens_por_dia_inicial);
-  if (limiteDia > 0 && (porDia.count ?? 0) >= limiteDia) return { podeEnviar: false, motivo: "bloqueado_limite_diario", parametro, parametroId: parametro.id, proximaTentativaEm: inicioProximoDia() };
+  if (limiteDia > 0 && (porDia.count ?? 0) + quantidadeMensagens > limiteDia) return { podeEnviar: false, motivo: "bloqueado_limite_diario", detalhe: `O envio requer ${quantidadeMensagens} vagas disponíveis.`, parametro, parametroId: parametro.id, proximaTentativaEm: inicioProximoDia() };
 
   const limiteCategoriaCliente = Number(parametro.max_mensagens_cliente_categoria_dia ?? 2);
   if (limiteCategoriaCliente > 0) {
@@ -192,9 +198,10 @@ export async function validarParametrosEnvioWhats(args: Omit<ProcessarEnvioArgs,
     porClienteCategoria = clienteId != null ? porClienteCategoria.eq("cliente_id", String(clienteId)) : porClienteCategoria.eq("cliente_telefone", telefone);
     const contagemCategoria = await porClienteCategoria;
     if (contagemCategoria.error) throw contagemCategoria.error;
-    if ((contagemCategoria.count ?? 0) >= limiteCategoriaCliente) {
+    if ((contagemCategoria.count ?? 0) + quantidadeMensagens > limiteCategoriaCliente) {
       return {
         podeEnviar: false, motivo: "bloqueado_limite_categoria_cliente_dia", parametro, parametroId: parametro.id,
+        detalhe: `O envio requer ${quantidadeMensagens} vagas disponíveis para este cliente e categoria.`,
         proximaTentativaEm: proximoDiaNoHorario(local.data, parametro.horario_inicio, parametro.timezone || "America/Sao_Paulo"),
       };
     }
@@ -251,7 +258,17 @@ export async function processarEnvioWhatsApp(args: ProcessarEnvioArgs) {
   }
   try {
     const retornoBtzap = await args.enviarBtzap();
-    const historicoId = await registrarSucessoEnvioWhats(base, validacao, retornoBtzap);
+    const enviosMultiplos = retornoBtzap && typeof retornoBtzap === "object" && Array.isArray((retornoBtzap as RetornoEnviosMultiplos).envios)
+      ? (retornoBtzap as RetornoEnviosMultiplos).envios
+      : null;
+    let historicoId: string | null = null;
+    if (enviosMultiplos?.length) {
+      for (const envio of enviosMultiplos) {
+        historicoId = await registrarSucessoEnvioWhats({ ...base, mensagem: envio.mensagem }, validacao, envio.retorno);
+      }
+    } else {
+      historicoId = await registrarSucessoEnvioWhats(base, validacao, retornoBtzap);
+    }
     return { enviado: true, bloqueado: false, historicoId, retornoBtzap, ...validacao };
   } catch (error) {
     const motivo = error instanceof Error ? error.message : String(error);

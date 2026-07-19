@@ -503,6 +503,13 @@ function hojeISO(): string {
   return `${ano}-${mes}-${dia}`;
 }
 
+function marcarMensagemComoReenvio(mensagem: string, tipoEnvio: "envio" | "reenvio") {
+  if (tipoEnvio !== "reenvio") return mensagem;
+  const texto = mensagem.trimStart();
+  if (texto.toLowerCase().startsWith("*reenvio de cobrança*".toLowerCase())) return mensagem;
+  return `*Reenvio de cobrança*\n\n${mensagem}`;
+}
+
 async function detalharErroEdgeFunction(error: unknown) {
   const erro = error as { message?: string; context?: unknown; name?: string } | null;
   const partes = [erro?.message || "Falha ao chamar a Edge Function."];
@@ -1151,7 +1158,7 @@ export function ContasAReceber() {
       conta,
       tipoEnvio,
       telefone: conta.cliente_telefone ?? "",
-      mensagem: montarMensagemCobrancaWhatsapp(conta),
+      mensagem: marcarMensagemComoReenvio(montarMensagemCobrancaWhatsapp(conta), tipoEnvio),
       erro: null,
       enviando: false,
       modelos: [],
@@ -1174,11 +1181,12 @@ export function ContasAReceber() {
       ]);
       const modeloSugerido = selecionarModeloPadraoContaReceber(conta, modelos);
       const chaveSugerida = modeloSugerido ? getChaveModeloMensagem(modeloSugerido) : "";
-      const mensagemModelo = modeloSugerido
+      const mensagemModeloBase = modeloSugerido
         ? montarMensagemModeloContaReceber(conta, modeloSugerido, {
           nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
           }, configModelos)
         : montarMensagemCobrancaWhatsapp(conta);
+      const mensagemModelo = marcarMensagemComoReenvio(mensagemModeloBase, tipoEnvio);
       setRevisaoWhatsapp((atual) => atual?.conta.id_ctarec === conta.id_ctarec
         ? {
             ...atual,
@@ -1203,11 +1211,12 @@ export function ContasAReceber() {
   function selecionarModeloWhatsapp(idModelo: string) {
     if (!revisaoWhatsapp) return;
     const modelo = revisaoWhatsapp.modelos.find((item) => getChaveModeloMensagem(item) === idModelo);
-    const mensagem = modelo
+    const mensagemBase = modelo
       ? montarMensagemModeloContaReceber(revisaoWhatsapp.conta, modelo, {
           nome: usuario?.empresa_nome_fantasia || usuario?.empresa_razao_social,
         }, revisaoWhatsapp.configModelos)
       : revisaoWhatsapp.mensagem;
+    const mensagem = marcarMensagemComoReenvio(mensagemBase, revisaoWhatsapp.tipoEnvio);
     setRevisaoWhatsapp({ ...revisaoWhatsapp, modeloSelecionado: idModelo, mensagem, erro: null, avisoModelo: null });
   }
 
@@ -1347,8 +1356,8 @@ export function ContasAReceber() {
         ))}
       </section>
 
-      <section className="filters-panel" aria-label="Filtros">
-        <label>
+      <section className="filters-panel receivables-filters-panel" aria-label="Filtros">
+        <label className="receivables-filter-search">
           <span>Busca</span>
           <input
             type="search"

@@ -26,6 +26,7 @@ interface BtzapConfigData {
   url_servidor: string | null;
   ativo: boolean | null;
   endpoint_envio_texto: string | null;
+  endpoint_envio_media: string | null;
   metodo_envio_texto: string | null;
   formato_payload: string | null;
   token_instancia: string | null;
@@ -321,6 +322,7 @@ export function Configuracoes() {
   const [nomeInstancia, setNomeInstancia] = useState("");
   const [urlServidor, setUrlServidor] = useState("");
   const [endpointEnvioTexto, setEndpointEnvioTexto] = useState("/send/text");
+  const [endpointEnvioMedia, setEndpointEnvioMedia] = useState("/send/media");
   const [metodoEnvioTexto, setMetodoEnvioTexto] = useState("POST");
   const [formatoPayload, setFormatoPayload] = useState("btzap");
   const [tokenInstancia, setTokenInstancia] = useState("");
@@ -354,6 +356,7 @@ export function Configuracoes() {
     setNomeInstancia("");
     setUrlServidor("");
     setEndpointEnvioTexto("/send/text");
+    setEndpointEnvioMedia("/send/media");
     setMetodoEnvioTexto("POST");
     setFormatoPayload("btzap");
     setTokenInstancia("");
@@ -411,6 +414,7 @@ export function Configuracoes() {
   setNomeInstancia(config.nome_instancia ?? "");
   setUrlServidor(config.url_servidor ?? "");
   setEndpointEnvioTexto(config.endpoint_envio_texto ?? "/send/text");
+  setEndpointEnvioMedia(config.endpoint_envio_media ?? "/send/media");
   setMetodoEnvioTexto(config.metodo_envio_texto ?? "POST");
   setFormatoPayload(config.formato_payload ?? "btzap");
   setAtivo(config.ativo !== false);
@@ -447,6 +451,7 @@ export function Configuracoes() {
         token_instancia: tokenInstancia.trim(),
         url_servidor: urlServidor.trim(),
         endpoint_envio_texto: endpointEnvioTexto.trim(),
+        endpoint_envio_media: endpointEnvioMedia.trim(),
         metodo_envio_texto: metodoEnvioTexto.trim(),
         formato_payload: formatoPayload.trim(),
         ativo,
@@ -762,6 +767,15 @@ export function Configuracoes() {
             <input
               value={endpointEnvioTexto}
               onChange={(event) => setEndpointEnvioTexto(event.target.value)}
+            />
+          </label>
+
+          <label>
+            <span>Endpoint de envio de mídia</span>
+            <input
+              value={endpointEnvioMedia}
+              onChange={(event) => setEndpointEnvioMedia(event.target.value)}
+              placeholder="/send/media"
             />
           </label>
 

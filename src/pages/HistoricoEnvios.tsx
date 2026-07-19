@@ -57,6 +57,7 @@ const resumoHistoricoVazio = {
   enviados: 0,
   erros: 0,
   pendentes: 0,
+  cancelados: 0,
   total: 0,
 };
 
@@ -91,6 +92,9 @@ const HISTORICO_ENVIOS_SELECT = [
   "ultimo_webhook_em",
   "webhook_ultimo_evento",
   "response_payload",
+  "envio_forcado",
+  "envio_forcado_em",
+  "envio_forcado_motivo",
 ].join(",");
 
 function formatarDataFiltro(valor: string) {
@@ -152,7 +156,7 @@ function formatarMotivoBloqueio(motivo: string | null | undefined) {
   return mensagens[String(motivo ?? "")] ?? motivo ?? null;
 }
 
-function normalizarStatusEnvio(envio: WhatsappEnvio): "pendente" | "enviado" | "erro" {
+function normalizarStatusEnvio(envio: WhatsappEnvio): "pendente" | "enviado" | "cancelado" | "erro" {
   const status = normalizarTexto(envio.status);
   const motivo = String(envio.motivo_bloqueio ?? "");
   const motivosPendentes = new Set([
@@ -171,10 +175,12 @@ function normalizarStatusEnvio(envio: WhatsappEnvio): "pendente" | "enviado" | "
     "max_tentativas_reenvio",
   ]);
   const enviados = new Set(["enviado", "sent", "delivered", "read", "sucesso", "processado"]);
+  const cancelados = new Set(["cancelado", "cancelada", "canceled", "cancelled"]);
   const erros = new Set(["erro", "erro_btzap", "erro_whatsapp", "erro_internet", "timeout", "falha_api", "erro_conexao", "erro_tecnico", "erro_inesperado", "falhou", "falha"]);
 
   if (status === "pendente" || motivosPendentes.has(motivo)) return "pendente";
   if (enviados.has(status)) return "enviado";
+  if (cancelados.has(status)) return "cancelado";
   if (erros.has(status) || erros.has(motivo)) return "erro";
   return "pendente";
 }
@@ -183,6 +189,7 @@ function labelStatusEnvio(envio: WhatsappEnvio) {
   const status = normalizarStatusEnvio(envio);
   if (status === "enviado") return "Enviado";
   if (status === "erro") return "Erro";
+  if (status === "cancelado") return "Cancelado";
   return "Pendente";
 }
 
@@ -232,6 +239,7 @@ function getStatusClass(envio: WhatsappEnvio) {
   const statusNormalizado = normalizarStatusEnvio(envio);
 
   if (statusNormalizado === "enviado") return "history-status history-status-enviado";
+  if (statusNormalizado === "cancelado") return "history-status history-status-cancelado";
   if (statusNormalizado === "erro") return "history-status history-status-erro";
   if (statusNormalizado === "pendente") return "history-status history-status-pendente";
 
@@ -239,6 +247,9 @@ function getStatusClass(envio: WhatsappEnvio) {
 }
 
 function renderConfirmacaoEntrega(envio: WhatsappEnvio) {
+  if (normalizarStatusEnvio(envio) === "cancelado") {
+    return <div className="history-delivery-status"><span className="delivery-status-badge delivery-status-unknown">Não enviado</span></div>;
+  }
   if (normalizarStatusEnvio(envio) === "pendente") {
     return <div className="history-delivery-status">
       <span className="delivery-status-badge delivery-status-unknown">Aguardando entrega</span>
@@ -257,6 +268,9 @@ function renderConfirmacaoEntrega(envio: WhatsappEnvio) {
 }
 
 function renderConfirmacaoVisualizacao(envio: WhatsappEnvio) {
+  if (normalizarStatusEnvio(envio) === "cancelado") {
+    return <div className="history-delivery-status"><span className="delivery-status-badge delivery-status-unknown">Não se aplica</span></div>;
+  }
   const dataVisualizacao = envio.lido_em || envio.visualizado_em || null;
   const visualizada = Boolean(dataVisualizacao || String(envio.status_entrega ?? "").toUpperCase() === "LIDO");
 
@@ -413,20 +427,22 @@ export function HistoricoEnvios() {
         .select("id", { count: "exact", head: true })
         .eq("id_empresa", usuario.id_empresa);
 
-      const [enviados, erros, pendentes, total] = await Promise.all([
+      const [enviados, erros, pendentes, cancelados, total] = await Promise.all([
         consultaBase().eq("status", "enviado"),
         consultaBase().eq("status", "erro"),
         consultaBase().eq("status", "pendente"),
+        consultaBase().eq("status", "cancelado"),
         consultaBase(),
       ]);
 
-      const erroResumo = enviados.error ?? erros.error ?? pendentes.error ?? total.error;
+      const erroResumo = enviados.error ?? erros.error ?? pendentes.error ?? cancelados.error ?? total.error;
       if (erroResumo) throw erroResumo;
 
       setResumo({
         enviados: enviados.count ?? 0,
         erros: erros.count ?? 0,
         pendentes: pendentes.count ?? 0,
+        cancelados: cancelados.count ?? 0,
         total: total.count ?? 0,
       });
     } catch {
@@ -535,6 +551,7 @@ export function HistoricoEnvios() {
     enviado: "Enviado",
     erro: "Erro",
     pendente: "Pendente",
+    cancelado: "Cancelado",
   };
   const filtrosAtivosHistorico = [
     filtros.busca.trim() ? `Busca: ${filtros.busca.trim()}` : null,
@@ -549,6 +566,7 @@ export function HistoricoEnvios() {
     { label: "Mensagens enviadas", value: resumo.enviados, icon: "sent", color: "verde", help: "Envios concluídos", status: "enviado" },
     { label: "Mensagens com erro", value: resumo.erros, icon: "error", color: "vermelho", help: "Falhas registradas", status: "erro" },
     { label: "Mensagens pendentes", value: resumo.pendentes, icon: "pending", color: "laranja", help: "Aguardando envio", status: "pendente" },
+    { label: "Mensagens canceladas", value: resumo.cancelados, icon: "close", color: "cinza", help: "Cancelamentos registrados", status: "cancelado" },
     { label: "Total de envios", value: resumo.total, icon: "list", color: "azul", help: "Todos os registros", status: "todos" },
   ];
 
@@ -658,6 +676,7 @@ export function HistoricoEnvios() {
               <option value="enviado">Enviado</option>
               <option value="erro">Erro</option>
               <option value="pendente">Pendente</option>
+              <option value="cancelado">Cancelado</option>
             </select>
           </label>
 
@@ -748,6 +767,7 @@ export function HistoricoEnvios() {
                     </span>
                   </td>
                   <td>
+                    {envio.envio_forcado && <span className="forced-send-badge">Envio forçado</span>}
                     <span className="history-error-cell" title={mostrarValor(getRetornoErroEnvio(envio))}>
                       {resumirErro(getRetornoErroEnvio(envio))}
                     </span>
